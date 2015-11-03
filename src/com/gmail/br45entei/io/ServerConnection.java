@@ -1,6 +1,5 @@
 package com.gmail.br45entei.io;
 
-import com.gmail.br45entei.swt.Functions;
 import com.gmail.br45entei.util.IOUtils;
 
 import java.io.IOException;
@@ -50,8 +49,8 @@ public final class ServerConnection {
 	}
 	
 	/** @return True if this connection is alive */
-	public final boolean isAlive(boolean pingCheck) {
-		pingCheck = false;
+	public final boolean isAlive() {//boolean pingCheck) {//Default: false
+		/*pingCheck = false;
 		if(pingCheck) {
 			this.out.println("PING: " + Functions.nextSessionId());
 			this.out.flush();
@@ -59,12 +58,12 @@ public final class ServerConnection {
 				return false;
 			}
 			return true;
-		}
+		}*/
 		return !this.socket.isClosed() && this.socket.isConnected();
 	}
 	
 	public final boolean close(String partingMessage) {
-		if(this.isAlive(false)) {
+		if(this.isAlive()) {
 			try {
 				this.out.println(partingMessage);
 				this.out.flush();
@@ -83,7 +82,7 @@ public final class ServerConnection {
 			this.socket.close();
 		} catch(Throwable ignored) {
 		}
-		return !this.isAlive(false);
+		return !this.isAlive();
 	}
 	
 }

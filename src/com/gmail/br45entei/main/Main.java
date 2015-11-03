@@ -55,6 +55,7 @@ public class Main {
 	protected static Text							commandInput;
 	
 	protected static final HashMap<Integer, String>	consoleLogs				= new HashMap<>();
+	protected static final HashMap<Integer, String>	consoleErrs				= new HashMap<>();
 	
 	protected static volatile String				errorStr				= null;
 	
@@ -73,12 +74,16 @@ public class Main {
 	protected static volatile boolean				stopRemoteServer		= false;
 	
 	protected static final void addLogFromServer(String log) {
-		log = log.trim();
-		if(log.isEmpty() || log.equals("COMMAND SENT") || log.equals("LOG:")) {
+		if(log.trim().isEmpty() || log.trim().equals("COMMAND SENT")) {
 			return;
 		}
-		if(log.startsWith("LOG: ")) {
-			log = /*"[" + Functions.getSystemTime(true, false, false) + "]" + */log.substring(4).trim();
+		if(log.startsWith("LOG:")) {
+			log = log.substring(4).trim();
+		} else if(log.startsWith("WARN:")) {
+			log = log.substring(5).trim();
+			Integer key = Integer.valueOf(consoleErrs.size());
+			consoleErrs.put(key, log);
+			return;
 		}
 		Integer key = Integer.valueOf(consoleLogs.size());
 		consoleLogs.put(key, log);
@@ -106,6 +111,7 @@ public class Main {
 				}
 			} else if(data.equals("RemAdmin/1.0 10 RESET LOGS")) {
 				consoleLogs.clear();
+				consoleErrs.clear();
 			} else if(data.trim().toUpperCase().startsWith("SERVER-STATE: ")) {
 				//System.out.println("Test 3: \"" + data + "\"");
 				if(server != null) {
@@ -153,7 +159,7 @@ public class Main {
 					}
 				}
 				while(isRunning) {
-					if(server != null && server.isAlive(!attemptingConnection)) {
+					if(server != null && server.isAlive(/*!attemptingConnection*/)) {
 						try {
 							if(!handleServerData(StringUtil.readLine(server.in))) {
 								server.close("RemAdmin/1.0 -1 CLOSE");
@@ -258,7 +264,7 @@ public class Main {
 	private static Label			statusLabel;
 	
 	protected static final void serverStateQuery() {
-		if(server != null && !attemptingConnection && server.isAlive(!attemptingConnection)) {
+		if(server != null && !attemptingConnection && server.isAlive(/*!attemptingConnection*/)) {
 			final long now = System.currentTimeMillis();
 			long elapsedTime = now - lastServerStateQuery;
 			if(elapsedTime >= 100L) {
@@ -266,7 +272,7 @@ public class Main {
 				sendCommand("GET: SERVER-STATE");
 			}
 		}
-		if(server == null || !server.isAlive(false)) {
+		if(server == null || !server.isAlive()) {
 			if(serverPortChangeTo != lastServerPort) {
 				reconnectToServer = true;
 			}
@@ -283,7 +289,7 @@ public class Main {
 			reconnectToServer = false;
 			connectToServer();
 		}
-		final boolean connected = server != null && server.isAlive(!attemptingConnection);
+		final boolean connected = server != null && server.isAlive(/*!attemptingConnection*/);
 		btnConnectToServer.setEnabled(attemptingConnection ? false : !connected);
 		btnDisconnectFromServer.setEnabled(attemptingConnection ? false : connected);
 		String connectText = attemptingConnection ? "Attempting conenction..." : (connected ? "Connected to server" : "Connect to server");
@@ -298,7 +304,7 @@ public class Main {
 		clientPassword.setEnabled(!connected && !attemptingConnection);
 		sendCmd.setEnabled(connected && !attemptingConnection);
 		commandInput.setEnabled(connected && !attemptingConnection);
-		String status = "Status: " + (attemptingConnection ? "Connecting to server" : (server != null && server.isAlive(false) ? (server.serverActive ? "Server active" : server.serverJarSelected ? "Server inactive" : "No jar selected") : "Not connected"));
+		String status = "Status: " + (attemptingConnection ? "Connecting to server" : (server != null && server.isAlive() ? (server.serverActive ? "Server active" : server.serverJarSelected ? "Server inactive" : "No jar selected") : "Not connected"));
 		if(!statusLabel.getText().equals(status)) {
 			statusLabel.setText(status);
 		}
@@ -473,7 +479,7 @@ public class Main {
 		Thread thread = new Thread(Thread.currentThread().getName() + "_ConnectToServerThread") {
 			@Override
 			public final void run() {
-				if(server == null || !server.isAlive(true)) {
+				if(server == null || !server.isAlive(/*true*/)) {
 					attemptingConnection = true;
 					errorStr = null;
 					System.out.println("Attempting connection to \"" + serverIP + ":" + serverPort + "\":");
@@ -486,11 +492,12 @@ public class Main {
 							attemptingConnection = false;
 							return;
 						}
-						if(server.isAlive(false)) {
+						if(server.isAlive()) {
 							lastServerPort = serverPort;
 							serverPortChangeTo = serverPort;
 							errorStr = null;
 							consoleLogs.clear();
+							consoleErrs.clear();
 							String authLine = "CONNECT " + Base64.getEncoder().encodeToString((clientUsername + ":" + clientPassword).getBytes()).trim() + " RemAdmin/1.0";
 							System.out.println("Connection to server \"" + serverIP + ":" + serverPort + "\" successful. Authenticating...");// Sending authentication line: \"" + authLine + "\":");
 							server.out.println(authLine);
@@ -550,15 +557,28 @@ public class Main {
 				Collections.sort(keySet);
 				for(Integer key : keySet) {
 					String log = consoleLogs.get(key);
-					if(log != null) {
+					if(log != null && !log.isEmpty()) {
 						text += log + "\n";
 					}
 				}
-				text += ">";
+				if(server != null && server.isAlive()) {
+					text += ">";//XXX Console caret addition
+				}
 			} catch(ConcurrentModificationException ignored) {
 			}
 		} else {
-			text = errorStr == null ? "" : errorStr;
+			if(errorStr == null) {
+				ArrayList<Integer> keySet = new ArrayList<>(consoleErrs.keySet());
+				Collections.sort(keySet);
+				for(Integer key : keySet) {
+					String log = consoleErrs.get(key);
+					if(log != null && !log.isEmpty()) {
+						text += log + "\n";
+					}
+				}
+			} else {
+				text = errorStr;
+			}
 			//XXX DEBUG: text += "\r\n" + deleteMe;
 		}
 		if(!styledText.getText().equals(text)) {
