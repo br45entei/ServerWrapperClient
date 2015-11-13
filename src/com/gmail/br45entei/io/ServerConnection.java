@@ -26,6 +26,9 @@ public final class ServerConnection {
 	public volatile boolean		serverJarSelected	= false;
 	public volatile long		lastServerStateSet	= 0L;
 	
+	public volatile String		serverName			= null;
+	public volatile byte[]		serverFavicon		= null;
+	
 	@SuppressWarnings("resource")
 	public static final ServerConnection connectTo(String ip, int port) throws IOException {
 		if(!IOUtils.isIPReachable(ip)) {
@@ -59,7 +62,7 @@ public final class ServerConnection {
 			}
 			return true;
 		}*/
-		return !this.socket.isClosed() && this.socket.isConnected();
+		return !this.socket.isClosed() && !this.socket.isOutputShutdown() && !this.socket.isInputShutdown();
 	}
 	
 	public final boolean close(String partingMessage) {

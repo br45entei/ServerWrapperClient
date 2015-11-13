@@ -1,9 +1,11 @@
 package com.gmail.br45entei.main;
 
+import com.gmail.br45entei.data.DisposableByteArrayOutputStream;
 import com.gmail.br45entei.io.ServerConnection;
 import com.gmail.br45entei.swt.Functions;
 import com.gmail.br45entei.util.StringUtil;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.util.ArrayList;
@@ -39,6 +41,13 @@ public class Main {
 	protected static Thread							swtThread;
 	protected static volatile boolean				isRunning				= false;
 	
+	public static final String						PROTOCOL_NAME			= "RemAdmin";
+	public static final String						PROTOCOL_DELIMITER		= "/";
+	public static final String						PROTOCOL_VERSION		= "1.01";
+	
+	/** This application's networking protocol */
+	public static final String						PROTOCOL				= PROTOCOL_NAME + PROTOCOL_DELIMITER + PROTOCOL_VERSION;
+	
 	protected static Display						display;
 	protected static Shell							shell;
 	
@@ -53,6 +62,8 @@ public class Main {
 	protected static Text							clientPassword;
 	protected static StyledText						consoleOutput;
 	protected static Text							commandInput;
+	
+	protected static MenuItem						mntmExitaltF;
 	
 	protected static final HashMap<Integer, String>	consoleLogs				= new HashMap<>();
 	protected static final HashMap<Integer, String>	consoleErrs				= new HashMap<>();
@@ -69,9 +80,25 @@ public class Main {
 	protected static StyledText						stackTraceOutput;
 	protected static Button							btnStartServer;
 	protected static Button							btnStopServer;
+	protected static Label							statusLabel;
+	protected static Label							verticalSeparator;
 	
 	protected static volatile boolean				startRemoteServer		= false;
 	protected static volatile boolean				stopRemoteServer		= false;
+	
+	protected static volatile boolean				isAboutDialogOpen		= false;
+	
+	private static volatile long					lastServerStateQuery	= 0L;
+	
+	private static volatile boolean					setCustomIconFromServer	= false;
+	
+	public static final String getDefaultShellTitle() {
+		return "Server Wrapper Client - Version " + PROTOCOL_VERSION;
+	}
+	
+	private static final Image[] getDefaultShellImages() {
+		return new Image[] {SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-16x16.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-32x32.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-64x64.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-128x128.png")};
+	}
 	
 	protected static final void addLogFromServer(String log) {
 		if(log.trim().isEmpty() || log.trim().equals("COMMAND SENT")) {
@@ -93,7 +120,8 @@ public class Main {
 	
 	protected static final boolean handleServerData(String data) throws Throwable {
 		if(data != null) {
-			if(data.trim().equals("RemAdmin/1.0 -1 CLOSE")) {
+			String closeStr = PROTOCOL + " -1 CLOSE";
+			if(data.trim().equals(closeStr) || (data.trim().startsWith(PROTOCOL_NAME + PROTOCOL_DELIMITER) && data.trim().endsWith(" -1 CLOSE"))) {
 				return false;
 			} else if(data.trim().startsWith("PORT-CHANGE: ")) {
 				String portStr = data.substring("PORT-CHANGE:".length());
@@ -109,29 +137,64 @@ public class Main {
 					pongStr = pongStr.startsWith(" ") ? pongStr.substring(1) : pongStr;
 					server.pongStr = pongStr;
 				}
-			} else if(data.equals("RemAdmin/1.0 10 RESET LOGS")) {
+			} else if(data.equals(PROTOCOL + " 10 RESET LOGS")) {
 				consoleLogs.clear();
 				consoleErrs.clear();
 			} else if(data.trim().toUpperCase().startsWith("SERVER-STATE: ")) {
-				//System.out.println("Test 3: \"" + data + "\"");
 				if(server != null) {
-					//System.out.println("Test 4");
 					data = data.trim();
 					String serverState = data.substring("SERVER-STATE:".length());
 					serverState = serverState.startsWith(" ") ? serverState.substring(1).trim() : serverState.trim();
 					String[] split = serverState.split(Pattern.quote(","));
 					if(split.length >= 2) {
-						//System.out.println("Test 5");
 						String activeState = split[0].trim();
 						String selectedState = StringUtil.stringArrayToString(split, ',', 1).trim();
 						server.serverActive = activeState.equalsIgnoreCase("ACTIVE");
 						server.serverJarSelected = selectedState.equalsIgnoreCase("SELECTED");
 					} else {
-						System.out.println("Test 6");
 						server.serverActive = serverState.equalsIgnoreCase("ACTIVE");
 					}
 					deleteMe = "Server state: \"" + serverState + "\";\r\nresulting booleans: active: " + server.serverActive + "; jar selected: " + server.serverJarSelected + ";\r\nLast check: " + StringUtil.getTime(lastServerStateQuery, false, false) + ";\r\nLast receive: " + (server != null ? StringUtil.getTime(server.lastServerStateSet, false, false) : "null");
 					server.lastServerStateSet = System.currentTimeMillis();
+				}
+			} else if(data.trim().toUpperCase().startsWith("TITLE: ")) {
+				if(server != null) {
+					String title = data.substring("TITLE:".length());
+					title = title.startsWith(" ") ? title.substring(1) : title;
+					if(title.trim().equals("null")) {
+						server.serverName = null;
+					} else {
+						server.serverName = title;
+					}
+				}
+			} else if(data.trim().toUpperCase().startsWith("FAVICON: ")) {
+				String favInfo = data.substring("FAVICON:".length()).substring(1);
+				long length = -1;
+				String[] pSplit = favInfo.split(Pattern.quote("="));
+				if(pSplit.length > 1) {
+					String pname = pSplit[0];
+					String pvalue = StringUtil.stringArrayToString(pSplit, '=', 1).trim();
+					if(pname.equals("length")) {
+						if(StringUtil.isStrLong(pvalue)) {
+							length = Long.valueOf(pvalue).longValue();
+						}
+					}
+				}
+				//System.out.println("Favicon length: " + length + "; data: \"" + data + "\"; favInfo: \"" + favInfo + "\";");
+				if(server != null && length > 0) {
+					DisposableByteArrayOutputStream baos = new DisposableByteArrayOutputStream();
+					int count = 0;
+					while(count < length) {
+						baos.write(server.in.read());
+						count++;
+					}
+					server.serverFavicon = baos.toByteArray();
+					baos.dispose();
+					baos.close();//Does nothing
+					baos = null;
+					System.gc();
+				} else if(length == 0) {
+					server.serverFavicon = null;
 				}
 			} else {
 				addLogFromServer(data);
@@ -160,22 +223,27 @@ public class Main {
 				}
 				while(isRunning) {
 					if(server != null && server.isAlive(/*!attemptingConnection*/)) {
-						try {
-							if(!handleServerData(StringUtil.readLine(server.in))) {
-								server.close("RemAdmin/1.0 -1 CLOSE");
-							}
-						} catch(IOException e) {
-							if("Socket closed".equals(e.getMessage())) {
-								errorStr = "Connection to server closed.";
-							} else if("Connection reset".equals(e.getMessage())) {
-								errorStr = "Connection to server reset.";
-							} else {
+						if(!attemptingConnection) {
+							try {
+								if(!handleServerData(StringUtil.readLine(server.in))) {
+									if(server.close(PROTOCOL + " -1 CLOSE")) {
+										server = null;
+									}
+								}
+							} catch(IOException e) {
+								if("Socket closed".equals(e.getMessage())) {
+									errorStr = "Connection to server closed.";
+								} else if("Connection reset".equals(e.getMessage())) {
+									errorStr = "Connection to server reset.";
+								} else {
+									e.printStackTrace();
+									errorStr = "Unable to read server response: " + Functions.throwableToStr(e);
+								}
+								server.close(PROTOCOL + " -1 CLOSE");
+							} catch(Throwable e) {
 								e.printStackTrace();
-								errorStr = "Unable to read server response: " + Functions.throwableToStr(e);
+								errorStr = "Unable to handle incoming server data: " + Functions.throwableToStr(e);
 							}
-							server.close("RemAdmin/1.0 -1 CLOSE");
-						} catch(Throwable e) {
-							e.printStackTrace();
 						}
 					}
 					Functions.sleep(10L);
@@ -194,12 +262,14 @@ public class Main {
 				}
 				while(isRunning) {
 					serverStateQuery();
-					if(startRemoteServer && !server.serverActive) {
-						sendCommand("START-SERVER");
-						startRemoteServer = false;
-					} else if(stopRemoteServer && server.serverActive) {
-						sendCommand("STOP-SERVER");
-						stopRemoteServer = false;
+					if(server != null && server.isAlive()) {
+						if(startRemoteServer && !server.serverActive) {
+							sendCommand("START-SERVER");
+							startRemoteServer = false;
+						} else if(stopRemoteServer && server.serverActive) {
+							sendCommand("STOP-SERVER");
+							stopRemoteServer = false;
+						}
 					}
 					Functions.sleep(10L);
 				}
@@ -208,17 +278,20 @@ public class Main {
 		serverStateQuerier.setDaemon(true);
 		serverStateQuerier.start();
 		display = Display.getDefault();
-		shell = new Shell(display, SWT.TITLE | SWT.CLOSE | SWT.MIN);
+		shell = new Shell(display, SWT.SHELL_TRIM);
 		shell.addShellListener(new ShellAdapter() {
 			@Override
 			public void shellClosed(ShellEvent e) {
 				e.doit = false;
-				shutdown();
+				if(!isAboutDialogOpen) {
+					shutdown();
+				}
 			}
 		});
 		shell.setSize(700, 460);
-		shell.setText("Minecraft Server Wrapper Client - Made by Brian_Entei");
-		shell.setImages(new Image[] {SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-16x16.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-32x32.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-64x64.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-128x128.png")});
+		shell.setMinimumSize(shell.getSize());
+		shell.setText(getDefaultShellTitle());
+		shell.setImages(getDefaultShellImages());
 		Functions.centerShellOnPrimaryMonitor(shell);
 		
 		createContents();
@@ -260,9 +333,6 @@ public class Main {
 		}
 	}
 	
-	private static volatile long	lastServerStateQuery	= 0L;
-	private static Label			statusLabel;
-	
 	protected static final void serverStateQuery() {
 		if(server != null && !attemptingConnection && server.isAlive(/*!attemptingConnection*/)) {
 			final long now = System.currentTimeMillis();
@@ -279,10 +349,87 @@ public class Main {
 		}
 	}
 	
+	private static final void setShellIcon() {
+		Image[] images;
+		if(server == null || !server.isAlive()) {
+			if(server != null) {
+				server.serverFavicon = null;
+			}
+			images = getDefaultShellImages();
+		} else {
+			if(server.serverFavicon != null) {
+				if(!setCustomIconFromServer) {
+					try {
+						Image image = new Image(display, new ByteArrayInputStream(server.serverFavicon));
+						images = new Image[] {image};
+						setCustomIconFromServer = true;
+					} catch(Throwable e) {
+						System.err.print("Failed to change shell icon: " + Functions.throwableToStr(e));
+						server.serverFavicon = null;
+						images = getDefaultShellImages();
+					}
+				} else {
+					images = shell.getImages();//Don't change the icon, it has already been set
+				}
+			} else {
+				images = getDefaultShellImages();
+				setCustomIconFromServer = false;
+			}
+		}
+		Functions.setShellImages(shell, images);
+		runClock();
+	}
+	
+	private static final void setShellTitle() {
+		String shellTitle = getDefaultShellTitle();
+		if(server == null || !server.isAlive()) {
+			if(server != null) {
+				server.serverName = null;
+			}
+		} else {
+			String serverName = server.serverName;
+			if(serverName != null) {
+				shellTitle = serverName + " - Server Wrapper Client";
+			}
+		}
+		Functions.setTextFor(shell, shellTitle);
+	}
+	
+	private static final void updateShellAppearance() {
+		setShellTitle();
+		setShellIcon();
+	}
+	
+	private static final void resizeContentsToShell() {
+		final Point shellSize = shell.getSize();
+		final int sizeXOffset = 5;
+		final int sizeYOffset = 5;
+		Point consoleSize = new Point(shellSize.x - 342 - sizeXOffset, shellSize.y - 121 - sizeYOffset);
+		Point commandInputSize = new Point(shellSize.x - 423 - sizeXOffset, 25);
+		Point commandInputLocation = new Point(326, shellSize.y - 84 - sizeYOffset);
+		Point sendCmdLocation = new Point(shellSize.x - 91 - sizeXOffset, shellSize.y - 84 - sizeYOffset);
+		Point vertSepSize = new Point(2, shellSize.y - 69 - sizeYOffset);
+		Point btnStartLocation = new Point(10, shellSize.y - 84 - sizeYOffset);
+		Point btnStopLocation = new Point(91, shellSize.y - 84 - sizeYOffset);
+		Point statusLabelLocation = new Point(172, shellSize.y - 79 - sizeYOffset);
+		Point stackTraceOutSize = new Point(302, shellSize.y - 261 - sizeYOffset);
+		
+		Functions.setSizeFor(consoleOutput, consoleSize);
+		Functions.setSizeFor(commandInput, commandInputSize);
+		Functions.setLocationFor(commandInput, commandInputLocation);
+		Functions.setLocationFor(sendCmd, sendCmdLocation);
+		Functions.setSizeFor(verticalSeparator, vertSepSize);
+		Functions.setLocationFor(btnStartServer, btnStartLocation);
+		Functions.setLocationFor(btnStopServer, btnStopLocation);
+		Functions.setLocationFor(statusLabel, statusLabelLocation);
+		Functions.setSizeFor(stackTraceOutput, stackTraceOutSize);
+	}
+	
 	protected static final void updateUI() {
 		if(!isRunning || shell.isDisposed()) {
 			return;
 		}
+		updateShellAppearance();
 		if(reconnectToServer) {
 			serverPort.setSelection(serverPortChangeTo);
 			lastServerPort = serverPortChangeTo;
@@ -296,8 +443,11 @@ public class Main {
 		if(!btnConnectToServer.getText().equals(connectText)) {
 			btnConnectToServer.setText(connectText);
 		}
-		btnStartServer.setEnabled(connected && !server.serverActive && server.serverJarSelected && !attemptingConnection);
-		btnStopServer.setEnabled(connected && server.serverActive && !attemptingConnection);
+		if(mntmExitaltF.isEnabled() == isAboutDialogOpen) {
+			mntmExitaltF.setEnabled(!isAboutDialogOpen);
+		}
+		btnStartServer.setEnabled(connected && server != null && !server.serverActive && server.serverJarSelected && !attemptingConnection);
+		btnStopServer.setEnabled(connected && server != null && server.serverActive && !attemptingConnection);
 		serverIP.setEnabled(!connected && !attemptingConnection);
 		serverPort.setEnabled(!connected && !attemptingConnection);
 		clientUsername.setEnabled(!connected && !attemptingConnection);
@@ -308,6 +458,7 @@ public class Main {
 		if(!statusLabel.getText().equals(status)) {
 			statusLabel.setText(status);
 		}
+		resizeContentsToShell();
 		setTextFor(consoleOutput);
 		setTextFor(stackTraceOutput);
 	}
@@ -357,7 +508,7 @@ public class Main {
 		Menu menu_1 = new Menu(mntmfile);
 		mntmfile.setMenu(menu_1);
 		
-		MenuItem mntmExitaltF = new MenuItem(menu_1, SWT.NONE);
+		mntmExitaltF = new MenuItem(menu_1, SWT.NONE);
 		mntmExitaltF.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
@@ -367,17 +518,33 @@ public class Main {
 		mntmExitaltF.setText("E&xit\t(Alt + F4)");
 		mntmExitaltF.setAccelerator(SWT.ALT | SWT.F4);
 		
+		MenuItem mntmAbout = new MenuItem(menu, SWT.NONE);
+		mntmAbout.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				if(!isAboutDialogOpen) {
+					isAboutDialogOpen = true;
+					new AboutDialog(shell).open();
+					isAboutDialogOpen = false;
+				}
+			}
+		});
+		mntmAbout.setText("&About...");
+		
+		//XXX Shell size: 700, 460
+		Point shellSize = shell.getSize();
+		
 		Label label_1 = new Label(shell, SWT.SEPARATOR | SWT.HORIZONTAL);
 		label_1.setBounds(10, 72, 302, 2);
 		
-		Label label_2 = new Label(shell, SWT.SEPARATOR | SWT.VERTICAL);
-		label_2.setBounds(318, 10, 2, 391);
+		verticalSeparator = new Label(shell, SWT.SEPARATOR | SWT.VERTICAL);
+		verticalSeparator.setBounds(318, 10, 2, shellSize.y - 69);
 		
 		consoleOutput = new StyledText(shell, SWT.BORDER | SWT.READ_ONLY | SWT.H_SCROLL | SWT.V_SCROLL | SWT.CANCEL | SWT.MULTI);
 		consoleOutput.setBackground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_FOREGROUND));
 		consoleOutput.setForeground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
 		consoleOutput.setEditable(false);
-		consoleOutput.setBounds(326, 31, 358, 339);
+		consoleOutput.setBounds(326, 31, shellSize.x - 342, shellSize.y - 121);
 		
 		Label lblConsoleOutput = new Label(shell, SWT.NONE);
 		lblConsoleOutput.setBounds(326, 10, 91, 15);
@@ -394,7 +561,7 @@ public class Main {
 				}
 			}
 		});
-		commandInput.setBounds(326, 376, 277, 25);
+		commandInput.setBounds(326, shellSize.y - 84, shellSize.x - 423, shellSize.y - 435);
 		
 		sendCmd = new Button(shell, SWT.NONE);
 		sendCmd.addSelectionListener(new SelectionAdapter() {
@@ -404,7 +571,7 @@ public class Main {
 				commandInput.setText("");
 			}
 		});
-		sendCmd.setBounds(609, 376, 75, 25);
+		sendCmd.setBounds(shellSize.x - 91, shellSize.y - 84, 75, 25);
 		sendCmd.setText("Send Cmd");
 		
 		btnConnectToServer = new Button(shell, SWT.NONE);
@@ -438,7 +605,7 @@ public class Main {
 		stackTraceOutput.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
 		stackTraceOutput.setEditable(false);
 		stackTraceOutput.setForeground(SWTResourceManager.getColor(SWT.COLOR_RED));
-		stackTraceOutput.setBounds(10, 171, 302, 199);
+		stackTraceOutput.setBounds(10, 171, 302, shellSize.y - 261);
 		
 		btnStartServer = new Button(shell, SWT.NONE);
 		btnStartServer.addSelectionListener(new SelectionAdapter() {
@@ -447,7 +614,8 @@ public class Main {
 				startRemoteServer = true;
 			}
 		});
-		btnStartServer.setBounds(10, 376, 75, 25);
+		btnStartServer.setBounds(10, shellSize.y - 84, 75, 25);
+		
 		btnStartServer.setText("Start Server");
 		
 		btnStopServer = new Button(shell, SWT.NONE);
@@ -457,21 +625,24 @@ public class Main {
 				stopRemoteServer = true;
 			}
 		});
-		btnStopServer.setBounds(91, 376, 75, 25);
+		btnStopServer.setBounds(91, shellSize.y - 84, 75, 25);
 		btnStopServer.setText("Stop Server");
 		
 		statusLabel = new Label(shell, SWT.NONE);
-		statusLabel.setBounds(172, 381, 140, 15);
+		statusLabel.setBounds(172, shellSize.y - 79, 140, 15);
 		statusLabel.setText("Status:");
 	}
 	
 	protected static final void closeServer() {
 		if(server != null) {
-			server.close("RemAdmin/1.0 -1 CLOSE");
+			server.close(PROTOCOL + " -1 CLOSE");
 		}
 	}
 	
 	protected static final void connectToServer() {
+		if(attemptingConnection) {
+			return;
+		}
 		final String serverIP = Main.serverIP.getText();
 		final int serverPort = Main.serverPort.getSelection();
 		final String clientUsername = Main.clientUsername.getText();
@@ -479,42 +650,62 @@ public class Main {
 		Thread thread = new Thread(Thread.currentThread().getName() + "_ConnectToServerThread") {
 			@Override
 			public final void run() {
-				if(server == null || !server.isAlive(/*true*/)) {
-					attemptingConnection = true;
-					errorStr = null;
-					System.out.println("Attempting connection to \"" + serverIP + ":" + serverPort + "\":");
-					//closeServer();
+				attemptingConnection = true;
+				errorStr = null;
+				if(server != null) {
+					server.close();
+					server = null;
 					mainLoop();
-					try {
-						server = ServerConnection.connectTo(serverIP, serverPort);
-						if(server == null) {
-							errorStr = "Unresolved hostname: \"" + serverIP + "\"!";
-							attemptingConnection = false;
-							return;
-						}
-						if(server.isAlive()) {
-							lastServerPort = serverPort;
-							serverPortChangeTo = serverPort;
-							errorStr = null;
-							consoleLogs.clear();
-							consoleErrs.clear();
-							String authLine = "CONNECT " + Base64.getEncoder().encodeToString((clientUsername + ":" + clientPassword).getBytes()).trim() + " RemAdmin/1.0";
-							System.out.println("Connection to server \"" + serverIP + ":" + serverPort + "\" successful. Authenticating...");// Sending authentication line: \"" + authLine + "\":");
-							server.out.println(authLine);
-							server.out.flush();
-						}
-					} catch(ConnectException e) {
-						errorStr = "Unable to connect to server \"" + serverIP + ":" + serverPort + "\": " + e.getMessage();
-					} catch(IOException e) {
-						System.err.print("Unable to connect to server\"" + serverIP + ":" + serverPort + "\":");
-						e.printStackTrace();
-						errorStr = "Failed to connect to server \"" + serverIP + ":" + serverPort + "\": " + e.getMessage();
-					} catch(Throwable e) {
-						e.printStackTrace();
-						errorStr = "An unhandled exception occurred: " + Functions.throwableToStr(e);
-					}
-					attemptingConnection = false;
 				}
+				System.out.println("Attempting connection to \"" + serverIP + ":" + serverPort + "\":");
+				//closeServer();
+				mainLoop();
+				try {
+					server = ServerConnection.connectTo(serverIP, serverPort);
+					if(server == null) {
+						errorStr = "Unresolved hostname: \"" + serverIP + "\"!";
+						attemptingConnection = false;
+						return;
+					}
+					if(server.isAlive()) {
+						lastServerPort = serverPort;
+						serverPortChangeTo = serverPort;
+						errorStr = null;
+						consoleLogs.clear();
+						consoleErrs.clear();
+						String authLine = "HelloIAm " + Base64.getEncoder().encodeToString((clientUsername + ":" + clientPassword).getBytes()).trim() + " " + PROTOCOL;
+						System.out.println("Connection to server \"" + serverIP + ":" + serverPort + "\" successful. Authenticating...");// Sending authentication line: \"" + authLine + "\":");
+						server.out.println(authLine);
+						server.out.flush();
+					}
+					final String response = StringUtil.readLine(server.in);
+					if(!response.startsWith(PROTOCOL_NAME + PROTOCOL_DELIMITER)) {
+						errorStr = "Failed to log into server: \"" + serverIP + ":" + serverPort + "\":\r\nServer sent invalid response: \"" + response + "\"...";
+					} else if(response.contains("Version Mismatch: ")) {
+						errorStr = "Failed to log into server: \"" + serverIP + ":" + serverPort + "\":\r\nVersion mismatch: " + response.split(Pattern.quote(":"))[1];
+						addLogFromServer(response);
+						//server.close();
+						//server = null;
+					} else if(response.equals(PROTOCOL + " 1 Authentication Failure")) {
+						errorStr = "Failed to log into server: \"" + serverIP + ":" + serverPort + "\":\r\nUnknown username or bad password.";
+						addLogFromServer(response);
+					} else {
+						addLogFromServer(response);
+					}
+				} catch(ConnectException e) {
+					errorStr = "Unable to connect to server \"" + serverIP + ":" + serverPort + "\": " + e.getMessage();
+					server = null;
+				} catch(IOException e) {
+					System.err.print("Unable to connect to server\"" + serverIP + ":" + serverPort + "\": ");
+					e.printStackTrace();
+					errorStr = "Failed to connect to server \"" + serverIP + ":" + serverPort + "\": " + e.getMessage();
+					server = null;
+				} catch(Throwable e) {
+					e.printStackTrace();
+					errorStr = "An unhandled exception occurred: " + Functions.throwableToStr(e);
+					server = null;
+				}
+				attemptingConnection = false;
 			}
 		};
 		thread.setDaemon(true);
@@ -637,4 +828,5 @@ public class Main {
 			shell.setVisible(false);
 		}
 	}
+	
 }
