@@ -5,14 +5,20 @@ import com.gmail.br45entei.io.ServerConnection;
 import com.gmail.br45entei.swt.Functions;
 import com.gmail.br45entei.util.StringUtil;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.net.ConnectException;
-import java.util.ArrayList;
+import java.nio.charset.StandardCharsets;
 import java.util.Base64;
-import java.util.Collections;
 import java.util.ConcurrentModificationException;
-import java.util.HashMap;
+import java.util.Iterator;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.regex.Pattern;
 
 import org.eclipse.swt.SWT;
@@ -38,59 +44,88 @@ import org.eclipse.wb.swt.SWTResourceManager;
 /** @author Brian_Entei */
 public class Main {
 	
-	protected static Thread							swtThread;
-	protected static volatile boolean				isRunning				= false;
+	protected static Thread									swtThread;
+	protected static volatile boolean						isRunning				= false;
 	
-	public static final String						PROTOCOL_NAME			= "RemAdmin";
-	public static final String						PROTOCOL_DELIMITER		= "/";
-	public static final String						PROTOCOL_VERSION		= "1.01";
+	public static final String								PROTOCOL_NAME			= "RemAdmin";
+	public static final String								PROTOCOL_DELIMITER		= "/";
+	public static final String								PROTOCOL_VERSION		= "1.01";
 	
 	/** This application's networking protocol */
-	public static final String						PROTOCOL				= PROTOCOL_NAME + PROTOCOL_DELIMITER + PROTOCOL_VERSION;
+	public static final String								PROTOCOL				= PROTOCOL_NAME + PROTOCOL_DELIMITER + PROTOCOL_VERSION;
 	
-	protected static Display						display;
-	protected static Shell							shell;
+	protected static Display								display;
+	protected static Shell									shell;
 	
 	/** The socket that the server will be listening on */
-	public static final int							server_listen_port		= 17349;
-	protected static Text							serverIP;
-	protected static Spinner						serverPort;
-	protected static volatile int					lastServerPort			= server_listen_port;
-	protected static volatile int					serverPortChangeTo		= server_listen_port;
-	protected static volatile boolean				reconnectToServer		= false;
-	protected static Text							clientUsername;
-	protected static Text							clientPassword;
-	protected static StyledText						consoleOutput;
-	protected static Text							commandInput;
+	public static final int									server_listen_port		= 17349;
+	protected static Text									serverIP;
+	protected static Spinner								serverPort;
+	protected static volatile int							lastServerPort			= server_listen_port;
+	protected static volatile int							serverPortChangeTo		= server_listen_port;
+	protected static volatile boolean						reconnectToServer		= false;
+	protected static Text									clientUsername;
+	protected static Text									clientPassword;
+	protected static StyledText								consoleOutput;
+	protected static Text									commandInput;
 	
-	protected static MenuItem						mntmExitaltF;
+	protected static MenuItem								mntmExitaltF;
 	
-	protected static final HashMap<Integer, String>	consoleLogs				= new HashMap<>();
-	protected static final HashMap<Integer, String>	consoleErrs				= new HashMap<>();
+	protected static final ConcurrentLinkedQueue<String>	consoleLogs				= new ConcurrentLinkedQueue<>();
+	protected static final ConcurrentLinkedQueue<String>	consoleErrs				= new ConcurrentLinkedQueue<>();
 	
-	protected static volatile String				errorStr				= null;
+	private static volatile long							lastLogTime				= 0L;
+	private static volatile long							lastErrLogTime			= 0L;
+	private static volatile long							lastConstructLogTime	= 0L;
+	private static volatile long							lastConstructErrLogTime	= 0L;
 	
-	protected static Button							sendCmd;
+	//====
 	
-	protected static volatile ServerConnection		server;
+	public static final File								rootDir					= new File(System.getProperty("user.dir"));
 	
-	protected static volatile boolean				attemptingConnection	= false;
-	protected static Button							btnConnectToServer;
-	protected static Button							btnDisconnectFromServer;
-	protected static StyledText						stackTraceOutput;
-	protected static Button							btnStartServer;
-	protected static Button							btnStopServer;
-	protected static Label							statusLabel;
-	protected static Label							verticalSeparator;
+	static {
+		if(!rootDir.exists()) {
+			rootDir.mkdirs();
+		}
+	}
 	
-	protected static volatile boolean				startRemoteServer		= false;
-	protected static volatile boolean				stopRemoteServer		= false;
+	public static final String								settingsFileName		= "settings.txt";
+	private static volatile File							settingsFile;
+	private static volatile boolean							failedToCreateSettings	= false;
 	
-	protected static volatile boolean				isAboutDialogOpen		= false;
+	//====
 	
-	private static volatile long					lastServerStateQuery	= 0L;
+	protected static synchronized void setLastLogTime(long time) {
+		lastLogTime = time;
+	}
 	
-	private static volatile boolean					setCustomIconFromServer	= false;
+	protected static synchronized void setLastErrLogTime(long time) {
+		lastErrLogTime = time;
+	}
+	
+	protected static volatile String			errorStr				= null;
+	
+	protected static Button						sendCmd;
+	
+	protected static volatile ServerConnection	server;
+	
+	protected static volatile boolean			attemptingConnection	= false;
+	protected static Button						btnConnectToServer;
+	protected static Button						btnDisconnectFromServer;
+	protected static StyledText					stackTraceOutput;
+	protected static Button						btnStartServer;
+	protected static Button						btnStopServer;
+	protected static Label						statusLabel;
+	protected static Label						verticalSeparator;
+	
+	protected static volatile boolean			startRemoteServer		= false;
+	protected static volatile boolean			stopRemoteServer		= false;
+	
+	protected static volatile boolean			isAboutDialogOpen		= false;
+	
+	private static volatile long				lastServerStateQuery	= 0L;
+	
+	private static volatile boolean				setCustomIconFromServer	= false;
 	
 	public static final String getDefaultShellTitle() {
 		return "Server Wrapper Client - Version " + PROTOCOL_VERSION;
@@ -98,6 +133,15 @@ public class Main {
 	
 	private static final Image[] getDefaultShellImages() {
 		return new Image[] {SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-16x16.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-32x32.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-64x64.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-128x128.png")};
+	}
+	
+	protected static final void clearLogsFromServer() {
+		errorStr = null;
+		consoleLogs.clear();
+		consoleErrs.clear();
+		final long now = System.currentTimeMillis();
+		setLastLogTime(now);
+		setLastErrLogTime(now);
 	}
 	
 	protected static final void addLogFromServer(String log) {
@@ -108,15 +152,26 @@ public class Main {
 			log = log.substring(4).trim();
 		} else if(log.startsWith("WARN:")) {
 			log = log.substring(5).trim();
-			Integer key = Integer.valueOf(consoleErrs.size());
-			consoleErrs.put(key, log);
+			consoleErrs.add(log);
+			if(consoleErrs.size() > 500) {
+				while(consoleErrs.size() > 500) {
+					consoleErrs.poll();
+				}
+			}
+			setLastErrLogTime(System.currentTimeMillis());
 			return;
 		}
-		Integer key = Integer.valueOf(consoleLogs.size());
-		consoleLogs.put(key, log);
+		consoleLogs.add(log);
+		if(consoleLogs.size() > 500) {
+			while(consoleLogs.size() > 500) {
+				consoleLogs.poll();
+			}
+		}
+		setLastLogTime(System.currentTimeMillis());
 	}
 	
 	protected static volatile String	deleteMe	= "";
+	private static MenuItem				mntmSaveToSettings;
 	
 	protected static final boolean handleServerData(String data) throws Throwable {
 		if(data != null) {
@@ -138,8 +193,7 @@ public class Main {
 					server.pongStr = pongStr;
 				}
 			} else if(data.equals(PROTOCOL + " 10 RESET LOGS")) {
-				consoleLogs.clear();
-				consoleErrs.clear();
+				clearLogsFromServer();
 			} else if(data.trim().toUpperCase().startsWith("SERVER-STATE: ")) {
 				if(server != null) {
 					data = data.trim();
@@ -208,101 +262,179 @@ public class Main {
 		return Thread.currentThread() == swtThread;
 	}
 	
+	public static final File getSettingsFile() {
+		if(settingsFile == null || !settingsFile.isFile()) {
+			try {
+				settingsFile = new File(rootDir, settingsFileName);
+				settingsFile.createNewFile();
+				failedToCreateSettings = false;
+			} catch(Throwable e) {
+				if(!failedToCreateSettings) {
+					System.err.print("Unable to create \"" + settingsFileName + "\" file: ");
+					e.printStackTrace();
+				}
+				failedToCreateSettings = true;
+			}
+		}
+		return settingsFile;
+	}
+	
+	public static final boolean loadSettings() {
+		File file = getSettingsFile();
+		if(file != null && file.isFile()) {
+			try(BufferedReader br = new BufferedReader(new FileReader(file))) {
+				while(br.ready()) {
+					final String line = br.readLine();
+					final String[] split = line.split(Pattern.quote("="));
+					final String pname = split[0];
+					final String pvalue = StringUtil.stringArrayToString(split, '=', 1);
+					if(pname.equalsIgnoreCase("ipAddress")) {
+						serverIP.setText(pvalue);
+					} else if(pname.equalsIgnoreCase("port")) {
+						if(StringUtil.isStrInt(pvalue)) {
+							int port = Integer.valueOf(pvalue).intValue();
+							serverPort.setSelection(port);
+							lastServerPort = port;
+							serverPortChangeTo = port;
+						}
+					} else if(pname.equalsIgnoreCase("username")) {
+						clientUsername.setText(pvalue);
+					} else if(pname.equalsIgnoreCase("password")) {
+						clientPassword.setText(pvalue);
+					}
+				}
+				return true;
+			} catch(IOException e) {
+				System.err.print("Failed to load from file \"" + file.getName() + "\": ");
+				e.printStackTrace();
+			}
+		} else {
+			System.out.println("Unable to load from settings file because the file does not exist or could not be accessed.");
+		}
+		return false;
+	}
+	
+	public static final boolean saveSettings() {
+		File file = getSettingsFile();
+		if(file != null && file.isFile()) {
+			try(PrintWriter pr = new PrintWriter(new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8), true)) {
+				pr.println("ipAddress=" + serverIP.getText());
+				pr.println("port=" + serverPort.getSelection());
+				pr.println("username=" + clientUsername.getText());
+				pr.println("password=" + clientPassword.getText());
+				pr.flush();
+				return true;
+			} catch(Throwable e) {
+				System.err.print("Failed to save to file \"" + file.getName() + "\": ");
+				e.printStackTrace();
+			}
+		} else {
+			System.out.println("Unable to load from settings file because the file does not exist or could not be accessed.");
+		}
+		return false;
+	}
+	
 	/** Launch the application.
 	 * 
 	 * @param args System command arguments */
 	public static void main(String[] args) {
 		swtThread = Thread.currentThread();
-		Thread consoleLogUpdaterThread = new Thread() {
-			@Override
-			public final void run() {
-				if(!isRunning) {
-					while(!isRunning) {
-						Functions.sleep(10L);
+		try {
+			Thread consoleLogUpdaterThread = new Thread() {
+				@Override
+				public final void run() {
+					if(!isRunning) {
+						while(!isRunning) {
+							Functions.sleep(10L);
+						}
 					}
-				}
-				while(isRunning) {
-					if(server != null && server.isAlive(/*!attemptingConnection*/)) {
-						if(!attemptingConnection) {
-							try {
-								if(!handleServerData(StringUtil.readLine(server.in))) {
-									if(server.close(PROTOCOL + " -1 CLOSE")) {
-										server = null;
+					while(isRunning) {
+						if(server != null && server.isAlive(/*!attemptingConnection*/)) {
+							if(!attemptingConnection) {
+								try {
+									if(!handleServerData(StringUtil.readLine(server.in))) {
+										if(server.close(PROTOCOL + " -1 CLOSE")) {
+											server = null;
+										}
 									}
-								}
-							} catch(IOException e) {
-								if("Socket closed".equals(e.getMessage())) {
-									errorStr = "Connection to server closed.";
-								} else if("Connection reset".equals(e.getMessage())) {
-									errorStr = "Connection to server reset.";
-								} else {
+								} catch(IOException e) {
+									if("Socket closed".equals(e.getMessage())) {
+										errorStr = "Connection to server closed.";
+									} else if("Connection reset".equals(e.getMessage())) {
+										errorStr = "Connection to server reset.";
+									} else {
+										e.printStackTrace();
+										errorStr = "Unable to read server response: " + Functions.throwableToStr(e);
+									}
+									server.close(PROTOCOL + " -1 CLOSE");
+								} catch(Throwable e) {
 									e.printStackTrace();
-									errorStr = "Unable to read server response: " + Functions.throwableToStr(e);
+									errorStr = "Unable to handle incoming server data: " + Functions.throwableToStr(e);
 								}
-								server.close(PROTOCOL + " -1 CLOSE");
-							} catch(Throwable e) {
-								e.printStackTrace();
-								errorStr = "Unable to handle incoming server data: " + Functions.throwableToStr(e);
 							}
 						}
-					}
-					Functions.sleep(10L);
-				}
-			}
-		};
-		consoleLogUpdaterThread.setDaemon(true);
-		consoleLogUpdaterThread.start();
-		Thread serverStateQuerier = new Thread() {
-			@Override
-			public final void run() {
-				if(!isRunning) {
-					while(!isRunning) {
 						Functions.sleep(10L);
 					}
 				}
-				while(isRunning) {
-					serverStateQuery();
-					if(server != null && server.isAlive()) {
-						if(startRemoteServer && !server.serverActive) {
-							sendCommand("START-SERVER");
-							startRemoteServer = false;
-						} else if(stopRemoteServer && server.serverActive) {
-							sendCommand("STOP-SERVER");
-							stopRemoteServer = false;
+			};
+			consoleLogUpdaterThread.setDaemon(true);
+			consoleLogUpdaterThread.start();
+			Thread serverStateQuerier = new Thread() {
+				@Override
+				public final void run() {
+					if(!isRunning) {
+						while(!isRunning) {
+							Functions.sleep(10L);
 						}
 					}
-					Functions.sleep(10L);
+					while(isRunning) {
+						serverStateQuery();
+						if(server != null && server.isAlive()) {
+							if(startRemoteServer && !server.serverActive) {
+								sendCommand("START-SERVER");
+								startRemoteServer = false;
+							} else if(stopRemoteServer && server.serverActive) {
+								sendCommand("STOP-SERVER");
+								stopRemoteServer = false;
+							}
+						}
+						Functions.sleep(10L);
+					}
 				}
-			}
-		};
-		serverStateQuerier.setDaemon(true);
-		serverStateQuerier.start();
-		display = Display.getDefault();
-		shell = new Shell(display, SWT.SHELL_TRIM);
-		shell.addShellListener(new ShellAdapter() {
-			@Override
-			public void shellClosed(ShellEvent e) {
-				e.doit = false;
-				if(!isAboutDialogOpen) {
-					shutdown();
+			};
+			serverStateQuerier.setDaemon(true);
+			serverStateQuerier.start();
+			display = Display.getDefault();
+			shell = new Shell(display, SWT.SHELL_TRIM);
+			shell.addShellListener(new ShellAdapter() {
+				@Override
+				public void shellClosed(ShellEvent e) {
+					e.doit = false;
+					if(!isAboutDialogOpen) {
+						shutdown();
+					}
 				}
+			});
+			shell.setSize(700, 460);
+			shell.setMinimumSize(shell.getSize());
+			shell.setText(getDefaultShellTitle());
+			shell.setImages(getDefaultShellImages());
+			Functions.centerShellOnPrimaryMonitor(shell);
+			
+			createContents();
+			loadSettings();
+			
+			isRunning = true;
+			openShell();
+			while(isRunning && !shell.isDisposed()) {
+				mainLoop();
 			}
-		});
-		shell.setSize(700, 460);
-		shell.setMinimumSize(shell.getSize());
-		shell.setText(getDefaultShellTitle());
-		shell.setImages(getDefaultShellImages());
-		Functions.centerShellOnPrimaryMonitor(shell);
-		
-		createContents();
-		
-		isRunning = true;
-		openShell();
-		while(isRunning && !shell.isDisposed()) {
-			mainLoop();
-		}
-		if(!shell.isDisposed()) {
-			shell.dispose();
+			saveSettings();
+			if(!shell.isDisposed()) {
+				shell.dispose();
+			}
+		} catch(Throwable e) {
+			e.printStackTrace();
 		}
 	}
 	
@@ -508,6 +640,28 @@ public class Main {
 		Menu menu_1 = new Menu(mntmfile);
 		mntmfile.setMenu(menu_1);
 		
+		MenuItem mntmLoadFromSettings = new MenuItem(menu_1, SWT.NONE);
+		mntmLoadFromSettings.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				addLogFromServer(loadSettings() ? "Wrapper settings successfully loaded from file." : "Unable to load from settings file! Is the file accessible?");
+			}
+		});
+		mntmLoadFromSettings.setText("L&oad from settings file\t(Ctrl+O)");
+		mntmLoadFromSettings.setAccelerator(SWT.CTRL | 'O');
+		
+		mntmSaveToSettings = new MenuItem(menu_1, SWT.NONE);
+		mntmSaveToSettings.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				addLogFromServer(saveSettings() ? "Wrapper settings successfully saved to file." : "Unable to save settings to file! Is the file accessible?");
+			}
+		});
+		mntmSaveToSettings.setText("&Save to settings file\t(Ctrl+S)");
+		mntmSaveToSettings.setAccelerator(SWT.CTRL | 'S');
+		
+		new MenuItem(menu_1, SWT.SEPARATOR);
+		
 		mntmExitaltF = new MenuItem(menu_1, SWT.NONE);
 		mntmExitaltF.addSelectionListener(new SelectionAdapter() {
 			@Override
@@ -515,7 +669,7 @@ public class Main {
 				shutdown();
 			}
 		});
-		mntmExitaltF.setText("E&xit\t(Alt + F4)");
+		mntmExitaltF.setText("E&xit\t(Alt+F4)");
 		mntmExitaltF.setAccelerator(SWT.ALT | SWT.F4);
 		
 		MenuItem mntmAbout = new MenuItem(menu, SWT.NONE);
@@ -670,9 +824,7 @@ public class Main {
 					if(server.isAlive()) {
 						lastServerPort = serverPort;
 						serverPortChangeTo = serverPort;
-						errorStr = null;
-						consoleLogs.clear();
-						consoleErrs.clear();
+						clearLogsFromServer();
 						String authLine = "HelloIAm " + Base64.getEncoder().encodeToString((clientUsername + ":" + clientPassword).getBytes()).trim() + " " + PROTOCOL;
 						System.out.println("Connection to server \"" + serverIP + ":" + serverPort + "\" successful. Authenticating...");// Sending authentication line: \"" + authLine + "\":");
 						server.out.println(authLine);
@@ -743,11 +895,13 @@ public class Main {
 	protected static final void setTextFor(StyledText styledText) {
 		String text = "";
 		if(styledText == consoleOutput) {//if(errorStr == null) {
+			if(lastConstructLogTime >= lastLogTime) {
+				return;
+			}
 			try {
-				ArrayList<Integer> keySet = new ArrayList<>(consoleLogs.keySet());
-				Collections.sort(keySet);
-				for(Integer key : keySet) {
-					String log = consoleLogs.get(key);
+				Iterator<String> iterator = consoleLogs.iterator();
+				while(iterator.hasNext()) {
+					String log = iterator.next();
 					if(log != null && !log.isEmpty()) {
 						text += log + "\n";
 					}
@@ -755,18 +909,22 @@ public class Main {
 				if(server != null && server.isAlive()) {
 					text += ">";//XXX Console caret addition
 				}
+				lastConstructLogTime = System.currentTimeMillis();
 			} catch(ConcurrentModificationException ignored) {
 			}
 		} else {
 			if(errorStr == null) {
-				ArrayList<Integer> keySet = new ArrayList<>(consoleErrs.keySet());
-				Collections.sort(keySet);
-				for(Integer key : keySet) {
-					String log = consoleErrs.get(key);
+				if(lastConstructErrLogTime >= lastErrLogTime) {
+					return;
+				}
+				Iterator<String> iterator = consoleErrs.iterator();
+				while(iterator.hasNext()) {
+					String log = iterator.next();
 					if(log != null && !log.isEmpty()) {
 						text += log + "\n";
 					}
 				}
+				lastConstructErrLogTime = System.currentTimeMillis();
 			} else {
 				text = errorStr;
 			}
@@ -828,5 +986,4 @@ public class Main {
 			shell.setVisible(false);
 		}
 	}
-	
 }
