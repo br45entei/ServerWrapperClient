@@ -32,17 +32,24 @@ import org.eclipse.swt.events.ShellEvent;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
+import org.eclipse.swt.widgets.ProgressBar;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Spinner;
+import org.eclipse.swt.widgets.TabFolder;
+import org.eclipse.swt.widgets.TabItem;
 import org.eclipse.swt.widgets.Text;
 import org.eclipse.wb.swt.SWTResourceManager;
 
 /** @author Brian_Entei */
-public class Main {
+@SuppressWarnings("javadoc")
+public final class Main {
+	
+	public static final boolean								debug					= false;
 	
 	protected static Thread									swtThread;
 	protected static volatile boolean						isRunning				= false;
@@ -89,9 +96,9 @@ public class Main {
 		}
 	}
 	
-	public static final String								settingsFileName		= "settings.txt";
-	private static volatile File							settingsFile;
-	private static volatile boolean							failedToCreateSettings	= false;
+	public static final String		settingsFileName		= "settings.txt";
+	private static volatile File	settingsFile;
+	private static volatile boolean	failedToCreateSettings	= false;
 	
 	//====
 	
@@ -115,15 +122,18 @@ public class Main {
 	protected static StyledText					stackTraceOutput;
 	protected static Button						btnStartServer;
 	protected static Button						btnStopServer;
+	protected static Button						btnRestartServer;
 	protected static Label						statusLabel;
 	protected static Label						verticalSeparator;
 	
 	protected static volatile boolean			startRemoteServer		= false;
 	protected static volatile boolean			stopRemoteServer		= false;
+	protected static volatile boolean			restartRemoteServer		= false;
 	
 	protected static volatile boolean			isAboutDialogOpen		= false;
 	
 	private static volatile long				lastServerStateQuery	= 0L;
+	private static volatile long				lastServerResourceQuery	= 0L;
 	
 	private static volatile boolean				setCustomIconFromServer	= false;
 	
@@ -131,7 +141,7 @@ public class Main {
 		return "Server Wrapper Client - Version " + PROTOCOL_VERSION;
 	}
 	
-	private static final Image[] getDefaultShellImages() {
+	public static final Image[] getDefaultShellImages() {
 		return new Image[] {SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-16x16.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-32x32.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-64x64.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-128x128.png")};
 	}
 	
@@ -172,6 +182,19 @@ public class Main {
 	
 	protected static volatile String	deleteMe	= "";
 	private static MenuItem				mntmSaveToSettings;
+	protected static MenuItem			mntmRestartServerAutomatically;
+	private static Label				label_2;
+	private static TabItem				tbtmResourceUsage;
+	private static Composite			consoleTabComposite;
+	private static ProgressBar			cpuUsageBar;
+	private static Label				cpuUsageTxt;
+	private static Label				ramUsageTxt;
+	private static ProgressBar			ramUsageBar;
+	private static Label				threadCountTxt;
+	private static TabFolder			tabFolder;
+	private static Composite			resourceTabComposite;
+	private static Composite			cpuUsageComposite;
+	private static Composite			ramUsageComposite;
 	
 	protected static final boolean handleServerData(String data) throws Throwable {
 		if(data != null) {
@@ -186,9 +209,37 @@ public class Main {
 					return true;//false;
 				}
 			}
-			if(data.startsWith("PONG: ")) {
+			if(data.startsWith("MESSAGE: ")) {
 				if(server != null) {
-					String pongStr = data.substring("COMMAND:".length());
+					String msgStr = data.substring("MESSAGE:".length());
+					msgStr = msgStr.startsWith(" ") ? msgStr.substring(1) : msgStr;
+					if(StringUtil.isStrInt(msgStr)) {
+						int length = Integer.valueOf(msgStr).intValue();
+						if(debug) {
+							addLogFromServer("Message length: " + length);
+						}
+						if(length > 0) {
+							DisposableByteArrayOutputStream baos = new DisposableByteArrayOutputStream();
+							int count = 0;
+							while(count < length) {
+								baos.write(server.in.read());
+								count++;
+							}
+							final String message = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+							if(debug) {
+								addLogFromServer("Message received: " + message);
+							}
+							server.popupMessages.add(message);
+							baos.dispose();
+							baos.close();//Does nothing
+							baos = null;
+							System.gc();
+						}
+					}
+				}
+			} else if(data.startsWith("PONG: ")) {
+				if(server != null) {
+					String pongStr = data.substring("PONG:".length());
 					pongStr = pongStr.startsWith(" ") ? pongStr.substring(1) : pongStr;
 					server.pongStr = pongStr;
 				}
@@ -210,6 +261,41 @@ public class Main {
 					}
 					deleteMe = "Server state: \"" + serverState + "\";\r\nresulting booleans: active: " + server.serverActive + "; jar selected: " + server.serverJarSelected + ";\r\nLast check: " + StringUtil.getTime(lastServerStateQuery, false, false) + ";\r\nLast receive: " + (server != null ? StringUtil.getTime(server.lastServerStateSet, false, false) : "null");
 					server.lastServerStateSet = System.currentTimeMillis();
+				}
+			} else if(data.trim().toUpperCase().startsWith("AUTOMATIC-RESTART: ")) {
+				if(server != null) {
+					data = data.trim();
+					String automaticRestart = data.substring("AUTOMATIC-RESTART:".length());
+					automaticRestart = automaticRestart.startsWith(" ") ? automaticRestart.substring(1).trim() : automaticRestart.trim();
+					server.automaticRestart = Boolean.valueOf(automaticRestart).booleanValue();
+				}
+			} else if(data.trim().toUpperCase().startsWith("CPU-USAGE: ")) {
+				if(server != null) {
+					String usage = data.substring("CPU-USAGE:".length());
+					usage = (usage.startsWith(" ") ? usage.substring(1) : usage).trim();
+					if(StringUtil.isStrDouble(usage)) {
+						server.serverCpuUsage = Double.valueOf(usage).doubleValue();
+					}
+				}
+			} else if(data.trim().toUpperCase().startsWith("RAM-USAGE: ")) {
+				if(server != null) {
+					String usage = data.substring("RAM-USAGE:".length());
+					usage = (usage.startsWith(" ") ? usage.substring(1) : usage).trim();
+					String[] split = usage.split(Pattern.quote("-"));
+					if(split.length == 2) {
+						if(StringUtil.isStrLong(split[0]) && StringUtil.isStrLong(split[1])) {
+							server.serverRamUsage = Long.valueOf(split[0]).longValue();
+							server.serverRamCommit = Long.valueOf(split[1]).longValue();
+						}
+					}
+				}
+			} else if(data.trim().toUpperCase().startsWith("THREAD-COUNT: ")) {
+				if(server != null) {
+					String count = data.substring("THREAD-COUNT:".length());
+					count = (count.startsWith(" ") ? count.substring(1) : count).trim();
+					if(StringUtil.isStrInt(count)) {
+						server.serverNumOfThreads = Integer.valueOf(count).intValue();
+					}
 				}
 			} else if(data.trim().toUpperCase().startsWith("TITLE: ")) {
 				if(server != null) {
@@ -298,9 +384,9 @@ public class Main {
 							serverPortChangeTo = port;
 						}
 					} else if(pname.equalsIgnoreCase("username")) {
-						clientUsername.setText(pvalue);
+						clientUsername.setText(pvalue.equals("null") ? "" : pvalue);
 					} else if(pname.equalsIgnoreCase("password")) {
-						clientPassword.setText(pvalue);
+						clientPassword.setText(pvalue.equals("null") ? "" : pvalue);
 					}
 				}
 				return true;
@@ -396,6 +482,9 @@ public class Main {
 							} else if(stopRemoteServer && server.serverActive) {
 								sendCommand("STOP-SERVER");
 								stopRemoteServer = false;
+							} else if(restartRemoteServer && server.serverActive) {
+								sendCommand("RESTART-SERVER");
+								restartRemoteServer = false;
 							}
 						}
 						Functions.sleep(10L);
@@ -469,9 +558,17 @@ public class Main {
 		if(server != null && !attemptingConnection && server.isAlive(/*!attemptingConnection*/)) {
 			final long now = System.currentTimeMillis();
 			long elapsedTime = now - lastServerStateQuery;
-			if(elapsedTime >= 100L) {
+			if(elapsedTime >= 500L) {// 1/2 of a second//100) {// 1/10th of a second
 				lastServerStateQuery = now;
 				sendCommand("GET: SERVER-STATE");
+				sendCommand("GET: AUTOMATIC-RESTART");
+			}
+			elapsedTime = now - lastServerResourceQuery;
+			if(elapsedTime >= 125L) {// 1/8th of a second
+				lastServerResourceQuery = now;
+				sendCommand("GET: CPU-USAGE");
+				sendCommand("GET: RAM-USAGE");
+				sendCommand("GET: THREAD-COUNT");
 			}
 		}
 		if(server == null || !server.isAlive()) {
@@ -533,18 +630,30 @@ public class Main {
 	}
 	
 	private static final void resizeContentsToShell() {
-		final Point shellSize = shell.getSize();
+		final Point shellSize = shell.getSize();//700 460
 		final int sizeXOffset = 5;
 		final int sizeYOffset = 5;
-		Point consoleSize = new Point(shellSize.x - 342 - sizeXOffset, shellSize.y - 121 - sizeYOffset);
-		Point commandInputSize = new Point(shellSize.x - 423 - sizeXOffset, 25);
-		Point commandInputLocation = new Point(326, shellSize.y - 84 - sizeYOffset);
-		Point sendCmdLocation = new Point(shellSize.x - 91 - sizeXOffset, shellSize.y - 84 - sizeYOffset);
+		
+		Functions.setSizeFor(tabFolder, new Point(shellSize.x - 342 - sizeXOffset, shellSize.y - 69 - sizeYOffset));
+		final Point comTabSize = consoleTabComposite.getSize();
+		final Point resourceComTabSize = resourceTabComposite.getSize();
+		
+		Point consoleSize = new Point(comTabSize.x, comTabSize.y - 30);
+		Point commandInputSize = new Point(comTabSize.x - (sendCmd.getSize().x + 5), 25);
+		Point commandInputLocation = new Point(0, comTabSize.y - 25);
+		Point sendCmdLocation = new Point(comTabSize.x - sendCmd.getSize().x, comTabSize.y - sendCmd.getSize().y);
 		Point vertSepSize = new Point(2, shellSize.y - 69 - sizeYOffset);
-		Point btnStartLocation = new Point(10, shellSize.y - 84 - sizeYOffset);
-		Point btnStopLocation = new Point(91, shellSize.y - 84 - sizeYOffset);
-		Point statusLabelLocation = new Point(172, shellSize.y - 79 - sizeYOffset);
-		Point stackTraceOutSize = new Point(302, shellSize.y - 261 - sizeYOffset);
+		Point btnStartLocation = new Point(10, shellSize.y - 116 - sizeYOffset);
+		Point btnStopLocation = new Point(113, shellSize.y - 116 - sizeYOffset);
+		Point btnRestartLocation = new Point(216, shellSize.y - 116 - sizeYOffset);
+		Point statusLabelLocation = new Point(10, shellSize.y - 80 - sizeYOffset);
+		Point stackTraceOutSize = new Point(302, shellSize.y - 293 - sizeYOffset);
+		Point label2Location = new Point(10, shellSize.y - 84 - sizeYOffset);
+		
+		Functions.setSizeFor(cpuUsageComposite, new Point(resourceComTabSize.x - 20, cpuUsageComposite.getSize().y));
+		Point cpuUsageBarSize = new Point(cpuUsageComposite.getSize().x - (cpuUsageBar.getLocation().x + 10), cpuUsageBar.getSize().y);
+		Functions.setSizeFor(ramUsageComposite, new Point(resourceComTabSize.x - 20, ramUsageComposite.getSize().y));
+		Point ramUsageBarSize = new Point(ramUsageComposite.getSize().x - (ramUsageBar.getLocation().x + 10), ramUsageBar.getSize().y);
 		
 		Functions.setSizeFor(consoleOutput, consoleSize);
 		Functions.setSizeFor(commandInput, commandInputSize);
@@ -553,8 +662,17 @@ public class Main {
 		Functions.setSizeFor(verticalSeparator, vertSepSize);
 		Functions.setLocationFor(btnStartServer, btnStartLocation);
 		Functions.setLocationFor(btnStopServer, btnStopLocation);
+		Functions.setLocationFor(btnRestartServer, btnRestartLocation);
 		Functions.setLocationFor(statusLabel, statusLabelLocation);
 		Functions.setSizeFor(stackTraceOutput, stackTraceOutSize);
+		Functions.setLocationFor(label_2, label2Location);
+		
+		Functions.setSizeFor(cpuUsageBar, cpuUsageBarSize);
+		Functions.setSizeFor(ramUsageBar, ramUsageBarSize);
+	}
+	
+	public static final boolean isConnectedToServer() {
+		return server != null && server.isAlive(/*!attemptingConnection*/);
 	}
 	
 	protected static final void updateUI() {
@@ -568,24 +686,112 @@ public class Main {
 			reconnectToServer = false;
 			connectToServer();
 		}
-		final boolean connected = server != null && server.isAlive(/*!attemptingConnection*/);
-		btnConnectToServer.setEnabled(attemptingConnection ? false : !connected);
-		btnDisconnectFromServer.setEnabled(attemptingConnection ? false : connected);
-		String connectText = attemptingConnection ? "Attempting conenction..." : (connected ? "Connected to server" : "Connect to server");
+		btnConnectToServer.setEnabled(attemptingConnection ? false : !isConnectedToServer());
+		btnDisconnectFromServer.setEnabled(attemptingConnection ? false : isConnectedToServer());
+		String connectText = attemptingConnection ? "Attempting conenction..." : (isConnectedToServer() ? "Connected to server" : "Connect to server");
 		if(!btnConnectToServer.getText().equals(connectText)) {
 			btnConnectToServer.setText(connectText);
 		}
+		if(mntmRestartServerAutomatically.getEnabled() != isConnectedToServer()) {
+			mntmRestartServerAutomatically.setEnabled(isConnectedToServer());
+		}
+		if(isConnectedToServer()) {
+			if(mntmRestartServerAutomatically.getSelection() != server.automaticRestart) {
+				mntmRestartServerAutomatically.setSelection(server.automaticRestart);
+			}
+		} else {
+			if(mntmRestartServerAutomatically.getSelection()) {
+				mntmRestartServerAutomatically.setSelection(false);
+			}
+		}
+		
+		//=====
+		
+		final String connMsg = isConnectedToServer() ? "[No data available.]" : "[Not connected]";
+		if(isConnectedToServer()) {
+			if(!server.popupMessages.isEmpty()) {
+				final String message = server.popupMessages.poll();
+				System.out.println("New message: " + message);
+				PopupDialog dialog = new PopupDialog(shell, message);
+				dialog.open();
+			}
+		}
+		if(isConnectedToServer() && server.serverActive) {
+			if(server.serverCpuUsage != -1L) {
+				int progress = Double.valueOf(Math.round(server.serverCpuUsage)).intValue();
+				if(cpuUsageBar.getSelection() != progress) {
+					cpuUsageBar.setSelection(progress);
+				}
+				final String cpuStr = Functions.roundToStr(server.serverCpuUsage) + "%";
+				if(!cpuUsageTxt.getText().equals(cpuStr)) {
+					cpuUsageTxt.setText(cpuStr);
+				}
+			} else {
+				if(!cpuUsageTxt.getText().equals(connMsg)) {
+					cpuUsageTxt.setText(connMsg);
+				}
+				if(cpuUsageBar.getSelection() != 0) {
+					cpuUsageBar.setSelection(0);
+				}
+			}
+			if(server.serverRamUsage != -1L && server.serverRamCommit != -1L) {
+				int progress = Math.round(((server.serverRamUsage + 0.00F) / (server.serverRamCommit + 0.00F)) * 100.00F);
+				if(ramUsageBar.getSelection() != progress) {
+					ramUsageBar.setSelection(progress);
+				}
+				final String ramStr = Functions.humanReadableByteCount(server.serverRamUsage, true, 2) + " / " + Functions.humanReadableByteCount(server.serverRamCommit, true, 2);
+				if(!ramUsageTxt.getText().equals(ramStr)) {
+					ramUsageTxt.setText(ramStr);
+				}
+			} else {
+				if(ramUsageBar.getSelection() != 0) {
+					ramUsageBar.setSelection(0);
+				}
+				if(!ramUsageTxt.getText().equals(connMsg)) {
+					ramUsageTxt.setText(connMsg);
+				}
+			}
+			if(server.serverNumOfThreads != -1) {
+				if(!threadCountTxt.getText().equals("" + server.serverNumOfThreads)) {
+					threadCountTxt.setText("" + server.serverNumOfThreads);
+				}
+			} else {
+				if(!threadCountTxt.getText().equals(connMsg)) {
+					threadCountTxt.setText(connMsg);
+				}
+			}
+		} else {
+			if(!cpuUsageTxt.getText().equals(connMsg)) {
+				cpuUsageTxt.setText(connMsg);
+			}
+			if(cpuUsageBar.getSelection() != 0) {
+				cpuUsageBar.setSelection(0);
+			}
+			if(!ramUsageTxt.getText().equals(connMsg)) {
+				ramUsageTxt.setText(connMsg);
+			}
+			if(ramUsageBar.getSelection() != 0) {
+				ramUsageBar.setSelection(0);
+			}
+			if(!threadCountTxt.getText().equals(connMsg)) {
+				threadCountTxt.setText(connMsg);
+			}
+		}
+		
+		//=====
+		
 		if(mntmExitaltF.isEnabled() == isAboutDialogOpen) {
 			mntmExitaltF.setEnabled(!isAboutDialogOpen);
 		}
-		btnStartServer.setEnabled(connected && server != null && !server.serverActive && server.serverJarSelected && !attemptingConnection);
-		btnStopServer.setEnabled(connected && server != null && server.serverActive && !attemptingConnection);
-		serverIP.setEnabled(!connected && !attemptingConnection);
-		serverPort.setEnabled(!connected && !attemptingConnection);
-		clientUsername.setEnabled(!connected && !attemptingConnection);
-		clientPassword.setEnabled(!connected && !attemptingConnection);
-		sendCmd.setEnabled(connected && !attemptingConnection);
-		commandInput.setEnabled(connected && !attemptingConnection);
+		btnStartServer.setEnabled(isConnectedToServer() && server != null && !server.serverActive && server.serverJarSelected && !attemptingConnection);
+		btnStopServer.setEnabled(isConnectedToServer() && server != null && server.serverActive && !attemptingConnection);
+		btnRestartServer.setEnabled(isConnectedToServer() && server != null && server.serverActive && !attemptingConnection);
+		serverIP.setEnabled(!isConnectedToServer() && !attemptingConnection);
+		serverPort.setEnabled(!isConnectedToServer() && !attemptingConnection);
+		clientUsername.setEnabled(!isConnectedToServer() && !attemptingConnection);
+		clientPassword.setEnabled(!isConnectedToServer() && !attemptingConnection);
+		sendCmd.setEnabled(isConnectedToServer() && !attemptingConnection);
+		commandInput.setEnabled(isConnectedToServer() && !attemptingConnection);
 		String status = "Status: " + (attemptingConnection ? "Connecting to server" : (server != null && server.isAlive() ? (server.serverActive ? "Server active" : server.serverJarSelected ? "Server inactive" : "No jar selected") : "Not connected"));
 		if(!statusLabel.getText().equals(status)) {
 			statusLabel.setText(status);
@@ -595,6 +801,7 @@ public class Main {
 		setTextFor(stackTraceOutput);
 	}
 	
+	@SuppressWarnings("unused")
 	private static final void createContents() {
 		
 		Label lblServerIp = new Label(shell, SWT.NONE);
@@ -639,6 +846,18 @@ public class Main {
 		
 		Menu menu_1 = new Menu(mntmfile);
 		mntmfile.setMenu(menu_1);
+		
+		mntmRestartServerAutomatically = new MenuItem(menu_1, SWT.CHECK);
+		mntmRestartServerAutomatically.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				if(server != null && server.isAlive()) {
+					sendCommand("SET: AUTOMATIC-RESTART=" + mntmRestartServerAutomatically.getSelection());
+				}
+			}
+		});
+		mntmRestartServerAutomatically.setEnabled(server != null && server.isAlive());
+		mntmRestartServerAutomatically.setText("Restart server automatically upon server exit");
 		
 		MenuItem mntmLoadFromSettings = new MenuItem(menu_1, SWT.NONE);
 		mntmLoadFromSettings.addSelectionListener(new SelectionAdapter() {
@@ -694,40 +913,6 @@ public class Main {
 		verticalSeparator = new Label(shell, SWT.SEPARATOR | SWT.VERTICAL);
 		verticalSeparator.setBounds(318, 10, 2, shellSize.y - 69);
 		
-		consoleOutput = new StyledText(shell, SWT.BORDER | SWT.READ_ONLY | SWT.H_SCROLL | SWT.V_SCROLL | SWT.CANCEL | SWT.MULTI);
-		consoleOutput.setBackground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_FOREGROUND));
-		consoleOutput.setForeground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
-		consoleOutput.setEditable(false);
-		consoleOutput.setBounds(326, 31, shellSize.x - 342, shellSize.y - 121);
-		
-		Label lblConsoleOutput = new Label(shell, SWT.NONE);
-		lblConsoleOutput.setBounds(326, 10, 91, 15);
-		lblConsoleOutput.setText("Console output:");
-		
-		commandInput = new Text(shell, SWT.BORDER);
-		commandInput.addKeyListener(new KeyAdapter() {
-			@Override
-			public void keyPressed(KeyEvent e) {
-				if(e.character == SWT.CR) {
-					e.doit = false;
-					sendInput(commandInput.getText());
-					commandInput.setText("");
-				}
-			}
-		});
-		commandInput.setBounds(326, shellSize.y - 84, shellSize.x - 423, shellSize.y - 435);
-		
-		sendCmd = new Button(shell, SWT.NONE);
-		sendCmd.addSelectionListener(new SelectionAdapter() {
-			@Override
-			public void widgetSelected(SelectionEvent e) {
-				sendInput(commandInput.getText());
-				commandInput.setText("");
-			}
-		});
-		sendCmd.setBounds(shellSize.x - 91, shellSize.y - 84, 75, 25);
-		sendCmd.setText("Send Cmd");
-		
 		btnConnectToServer = new Button(shell, SWT.NONE);
 		btnConnectToServer.addSelectionListener(new SelectionAdapter() {
 			@Override
@@ -759,7 +944,7 @@ public class Main {
 		stackTraceOutput.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
 		stackTraceOutput.setEditable(false);
 		stackTraceOutput.setForeground(SWTResourceManager.getColor(SWT.COLOR_RED));
-		stackTraceOutput.setBounds(10, 171, 302, shellSize.y - 261);
+		stackTraceOutput.setBounds(10, 171, 302, 167);
 		
 		btnStartServer = new Button(shell, SWT.NONE);
 		btnStartServer.addSelectionListener(new SelectionAdapter() {
@@ -768,7 +953,7 @@ public class Main {
 				startRemoteServer = true;
 			}
 		});
-		btnStartServer.setBounds(10, shellSize.y - 84, 75, 25);
+		btnStartServer.setBounds(10, 344, 97, 25);
 		
 		btnStartServer.setText("Start Server");
 		
@@ -779,12 +964,116 @@ public class Main {
 				stopRemoteServer = true;
 			}
 		});
-		btnStopServer.setBounds(91, shellSize.y - 84, 75, 25);
+		btnStopServer.setBounds(113, 344, 97, 25);
 		btnStopServer.setText("Stop Server");
 		
 		statusLabel = new Label(shell, SWT.NONE);
-		statusLabel.setBounds(172, shellSize.y - 79, 140, 15);
+		statusLabel.setBounds(10, 380, 302, 21);
 		statusLabel.setText("Status:");
+		
+		btnRestartServer = new Button(shell, SWT.NONE);
+		btnRestartServer.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				restartRemoteServer = true;
+			}
+		});
+		btnRestartServer.setBounds(216, 344, 97, 25);
+		btnRestartServer.setText("Restart Server");
+		
+		label_2 = new Label(shell, SWT.SEPARATOR | SWT.HORIZONTAL);
+		label_2.setBounds(10, 376, 302, 2);
+		
+		tabFolder = new TabFolder(shell, SWT.NONE);
+		tabFolder.setBounds(326, 10, 358, 381);
+		
+		TabItem tbtmConsoleOutput = new TabItem(tabFolder, SWT.NONE);
+		tbtmConsoleOutput.setToolTipText("View the server console");
+		tbtmConsoleOutput.setText("Console Output");
+		
+		consoleTabComposite = new Composite(tabFolder, SWT.NONE);
+		consoleTabComposite.setBackground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_BACKGROUND));
+		tbtmConsoleOutput.setControl(consoleTabComposite);
+		
+		sendCmd = new Button(consoleTabComposite, SWT.NONE);
+		sendCmd.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				sendInput(commandInput.getText());
+				commandInput.setText("");
+			}
+		});
+		sendCmd.setBounds(275, 328, 75, 25);
+		sendCmd.setText("Send Cmd");
+		
+		consoleOutput = new StyledText(consoleTabComposite, SWT.BORDER | SWT.READ_ONLY | SWT.H_SCROLL | SWT.V_SCROLL | SWT.CANCEL | SWT.MULTI);
+		consoleOutput.setBounds(0, 0, 350, 322);
+		consoleOutput.setBackground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_FOREGROUND));
+		consoleOutput.setForeground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
+		consoleOutput.setEditable(false);
+		
+		commandInput = new Text(consoleTabComposite, SWT.BORDER);
+		commandInput.addKeyListener(new KeyAdapter() {
+			@Override
+			public void keyPressed(KeyEvent e) {
+				if(e.character == SWT.CR) {
+					e.doit = false;
+					sendInput(commandInput.getText());
+					commandInput.setText("");
+				}
+			}
+		});
+		commandInput.setBounds(0, 328, 269, 25);
+		
+		tbtmResourceUsage = new TabItem(tabFolder, SWT.NONE);
+		tbtmResourceUsage.setToolTipText("Monitor system resources used by the server");
+		tbtmResourceUsage.setText("Resource Usage");
+		
+		resourceTabComposite = new Composite(tabFolder, SWT.NONE);
+		tbtmResourceUsage.setControl(resourceTabComposite);
+		resourceTabComposite.setBackground(SWTResourceManager.getColor(SWT.COLOR_WIDGET_BACKGROUND));
+		
+		cpuUsageComposite = new Composite(resourceTabComposite, SWT.NONE);
+		cpuUsageComposite.setBackground(SWTResourceManager.getColor(SWT.COLOR_DARK_GRAY));
+		cpuUsageComposite.setBounds(10, 10, 330, 68);
+		
+		Label lblCpuUsage = new Label(cpuUsageComposite, SWT.NONE);
+		lblCpuUsage.setBackground(SWTResourceManager.getColor(SWT.COLOR_DARK_GRAY));
+		lblCpuUsage.setBounds(10, 16, 75, 15);
+		lblCpuUsage.setText("CPU Usage:");
+		
+		cpuUsageBar = new ProgressBar(cpuUsageComposite, SWT.NONE);
+		cpuUsageBar.setBounds(124, 10, 196, 48);
+		
+		cpuUsageTxt = new Label(cpuUsageComposite, SWT.NONE);
+		cpuUsageTxt.setBackground(SWTResourceManager.getColor(SWT.COLOR_DARK_GRAY));
+		cpuUsageTxt.setBounds(10, 43, 108, 15);
+		
+		ramUsageComposite = new Composite(resourceTabComposite, SWT.NONE);
+		ramUsageComposite.setBackground(SWTResourceManager.getColor(SWT.COLOR_DARK_GRAY));
+		ramUsageComposite.setBounds(10, 84, 330, 68);
+		
+		Label lblResourceUsage = new Label(ramUsageComposite, SWT.NONE);
+		lblResourceUsage.setBackground(SWTResourceManager.getColor(SWT.COLOR_DARK_GRAY));
+		lblResourceUsage.setBounds(10, 10, 108, 15);
+		lblResourceUsage.setText("Resource Usage:");
+		
+		ramUsageTxt = new Label(ramUsageComposite, SWT.WRAP);
+		ramUsageTxt.setBackground(SWTResourceManager.getColor(SWT.COLOR_DARK_GRAY));
+		ramUsageTxt.setBounds(10, 31, 108, 27);
+		
+		ramUsageBar = new ProgressBar(ramUsageComposite, SWT.NONE);
+		ramUsageBar.setBounds(124, 31, 196, 27);
+		
+		Label lblThreadCount = new Label(ramUsageComposite, SWT.NONE);
+		lblThreadCount.setBackground(SWTResourceManager.getColor(SWT.COLOR_DARK_GRAY));
+		lblThreadCount.setBounds(124, 10, 85, 15);
+		lblThreadCount.setText("Thread Count:");
+		
+		threadCountTxt = new Label(ramUsageComposite, SWT.NONE);
+		threadCountTxt.setBackground(SWTResourceManager.getColor(SWT.COLOR_DARK_GRAY));
+		threadCountTxt.setBounds(215, 10, 105, 15);
+		
 	}
 	
 	protected static final void closeServer() {
@@ -879,17 +1168,29 @@ public class Main {
 	}
 	
 	protected static final void sendCommand(String cmd) {
+		if(!isConnectedToServer()) {
+			return;
+		}
 		if(cmd != null) {
-			server.out.print(cmd + "\r\n");
-			server.out.print("\r\n");
-			server.out.flush();
+			final PrintWriter out = server.out;
+			if(out != null) {//Stupid NPE's ...
+				out.print(cmd + "\r\n");
+				out.print("\r\n");
+				out.flush();
+			}
 		}
 	}
 	
 	protected static final void sendInput(String input) {
-		server.out.print("COMMAND: " + input + "\r\n");
-		server.out.print("\r\n");
-		server.out.flush();
+		if(!isConnectedToServer()) {
+			return;
+		}
+		final PrintWriter out = server.out;
+		if(out != null) {//Stupid NPE's ...
+			out.print("COMMAND: " + input + "\r\n");
+			out.print("\r\n");
+			out.flush();
+		}
 	}
 	
 	protected static final void setTextFor(StyledText styledText) {

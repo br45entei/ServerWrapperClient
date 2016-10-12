@@ -10,24 +10,38 @@ import java.io.PrintWriter;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /** @author Brian_Entei */
+@SuppressWarnings("javadoc")
 public final class ServerConnection {
 	
-	public final String			ip;
-	public final int			port;
-	public final Socket			socket;
-	public final InputStream	in;
-	public final OutputStream	outStream;
-	public final PrintWriter	out;
+	public final String							ip;
+	public final int							port;
+	public final Socket							socket;
+	public final InputStream					in;
+	public final OutputStream					outStream;
+	public final PrintWriter					out;
 	
-	public volatile String		pongStr				= null;
-	public volatile boolean		serverActive		= false;
-	public volatile boolean		serverJarSelected	= false;
-	public volatile long		lastServerStateSet	= 0L;
+	public volatile String						pongStr				= null;
+	public volatile boolean						serverActive		= false;
+	public volatile boolean						serverJarSelected	= false;
+	public volatile long						lastServerStateSet	= 0L;
+	public volatile boolean						automaticRestart	= false;
 	
-	public volatile String		serverName			= null;
-	public volatile byte[]		serverFavicon		= null;
+	public volatile String						serverName			= null;
+	public volatile byte[]						serverFavicon		= null;
+	
+	public final ConcurrentLinkedQueue<String>	popupMessages		= new ConcurrentLinkedQueue<>();
+	
+	//=====
+	
+	public volatile double						serverCpuUsage		= -1L;
+	public volatile long						serverRamUsage		= -1L;
+	public volatile long						serverRamCommit		= -1L;
+	public volatile int							serverNumOfThreads	= -1;
+	
+	//=====
 	
 	@SuppressWarnings("resource")
 	public static final ServerConnection connectTo(String ip, int port) throws IOException {
