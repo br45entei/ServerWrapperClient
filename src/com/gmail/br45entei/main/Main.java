@@ -123,12 +123,14 @@ public final class Main {
 	protected static Button						btnStartServer;
 	protected static Button						btnStopServer;
 	protected static Button						btnRestartServer;
+	protected static Button						btnKillServ;
 	protected static Label						statusLabel;
 	protected static Label						verticalSeparator;
 	
 	protected static volatile boolean			startRemoteServer		= false;
 	protected static volatile boolean			stopRemoteServer		= false;
 	protected static volatile boolean			restartRemoteServer		= false;
+	protected static volatile boolean			killRemoteServer		= false;
 	
 	protected static volatile boolean			isAboutDialogOpen		= false;
 	
@@ -479,6 +481,9 @@ public final class Main {
 							if(startRemoteServer && !server.serverActive) {
 								sendCommand("START-SERVER");
 								startRemoteServer = false;
+							} else if(killRemoteServer && server.serverActive) {
+								sendCommand("KILL-SERVER");
+								killRemoteServer = false;
 							} else if(stopRemoteServer && server.serverActive) {
 								sendCommand("STOP-SERVER");
 								stopRemoteServer = false;
@@ -643,9 +648,10 @@ public final class Main {
 		Point commandInputLocation = new Point(0, comTabSize.y - 25);
 		Point sendCmdLocation = new Point(comTabSize.x - sendCmd.getSize().x, comTabSize.y - sendCmd.getSize().y);
 		Point vertSepSize = new Point(2, shellSize.y - 69 - sizeYOffset);
-		Point btnStartLocation = new Point(10, shellSize.y - 116 - sizeYOffset);
-		Point btnStopLocation = new Point(113, shellSize.y - 116 - sizeYOffset);
-		Point btnRestartLocation = new Point(216, shellSize.y - 116 - sizeYOffset);
+		Point btnStartLocation = new Point(btnStartServer.getLocation().x, shellSize.y - 116 - sizeYOffset);
+		Point btnStopLocation = new Point(btnStopServer.getLocation().x, shellSize.y - 116 - sizeYOffset);
+		Point btnRestartLocation = new Point(btnRestartServer.getLocation().x, shellSize.y - 116 - sizeYOffset);
+		Point btnKillLocation = new Point(btnKillServ.getLocation().x, shellSize.y - 116 - sizeYOffset);
 		Point statusLabelLocation = new Point(10, shellSize.y - 80 - sizeYOffset);
 		Point stackTraceOutSize = new Point(302, shellSize.y - 293 - sizeYOffset);
 		Point label2Location = new Point(10, shellSize.y - 84 - sizeYOffset);
@@ -663,6 +669,7 @@ public final class Main {
 		Functions.setLocationFor(btnStartServer, btnStartLocation);
 		Functions.setLocationFor(btnStopServer, btnStopLocation);
 		Functions.setLocationFor(btnRestartServer, btnRestartLocation);
+		Functions.setLocationFor(btnKillServ, btnKillLocation);
 		Functions.setLocationFor(statusLabel, statusLabelLocation);
 		Functions.setSizeFor(stackTraceOutput, stackTraceOutSize);
 		Functions.setLocationFor(label_2, label2Location);
@@ -786,6 +793,7 @@ public final class Main {
 		btnStartServer.setEnabled(isConnectedToServer() && server != null && !server.serverActive && server.serverJarSelected && !attemptingConnection);
 		btnStopServer.setEnabled(isConnectedToServer() && server != null && server.serverActive && !attemptingConnection);
 		btnRestartServer.setEnabled(isConnectedToServer() && server != null && server.serverActive && !attemptingConnection);
+		btnKillServ.setEnabled(isConnectedToServer() && server != null && server.serverActive && !attemptingConnection);
 		serverIP.setEnabled(!isConnectedToServer() && !attemptingConnection);
 		serverPort.setEnabled(!isConnectedToServer() && !attemptingConnection);
 		clientUsername.setEnabled(!isConnectedToServer() && !attemptingConnection);
@@ -953,7 +961,7 @@ public final class Main {
 				startRemoteServer = true;
 			}
 		});
-		btnStartServer.setBounds(10, 344, 97, 25);
+		btnStartServer.setBounds(10, 344, 76, 25);
 		
 		btnStartServer.setText("Start Server");
 		
@@ -964,7 +972,7 @@ public final class Main {
 				stopRemoteServer = true;
 			}
 		});
-		btnStopServer.setBounds(113, 344, 97, 25);
+		btnStopServer.setBounds(92, 344, 76, 25);
 		btnStopServer.setText("Stop Server");
 		
 		statusLabel = new Label(shell, SWT.NONE);
@@ -978,8 +986,18 @@ public final class Main {
 				restartRemoteServer = true;
 			}
 		});
-		btnRestartServer.setBounds(216, 344, 97, 25);
+		btnRestartServer.setBounds(174, 344, 76, 25);
 		btnRestartServer.setText("Restart Server");
+		
+		btnKillServ = new Button(shell, SWT.NONE);
+		btnKillServ.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				killRemoteServer = true;
+			}
+		});
+		btnKillServ.setBounds(256, 344, 56, 25);
+		btnKillServ.setText("Kill Serv.");
 		
 		label_2 = new Label(shell, SWT.SEPARATOR | SWT.HORIZONTAL);
 		label_2.setBounds(10, 376, 302, 2);
