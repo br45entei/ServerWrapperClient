@@ -56,7 +56,7 @@ public class AboutDialog extends Dialog {
 		this.shell = new Shell(this.getParent(), this.getStyle());
 		this.shell.setSize(410, 310);
 		this.shell.setText("About " + Main.getDefaultShellTitle());
-		this.shell.setImages(getParent().getImages());
+		this.shell.setImages(Main.getDefaultShellImages());
 		Functions.centerShell2OnShell1(this.getParent(), this.shell);
 		
 		Text lblMessage = new Text(this.shell, SWT.READ_ONLY | SWT.WRAP | SWT.V_SCROLL | SWT.MULTI);

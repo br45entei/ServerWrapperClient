@@ -21,15 +21,17 @@ public final class PopupDialog extends Dialog {
 	
 	protected Response				result		= Response.NO_RESPONSE;
 	protected Shell					shell;
+	private final String			title;
 	private Text					message;
 	
 	/** Create the dialog.
 	 * 
 	 * @param parent
 	 * @param style */
-	public PopupDialog(Shell parent, String message) {
+	public PopupDialog(Shell parent, String title, String message) {
 		super(parent, SWT.DIALOG_TRIM | SWT.PRIMARY_MODAL);
 		setText("SWT Dialog");
+		this.title = title;
 		createContents(message);
 	}
 	
@@ -41,7 +43,7 @@ public final class PopupDialog extends Dialog {
 		shell.setText("test shell");
 		shell.open();
 		shell.layout();
-		Response result = new PopupDialog(shell, "test message testestestes").open();
+		Response result = new PopupDialog(shell, "Server Message", "test message testestestes").open();
 		System.out.println("Result: " + result.toString());
 		shell.dispose();
 		display.dispose();
@@ -57,6 +59,7 @@ public final class PopupDialog extends Dialog {
 		while(!this.shell.isDisposed()) {
 			if(runFromMain) {
 				Main.runClock();
+				this.updateUI();
 			} else {
 				if(!display.readAndDispatch()) {
 					this.shell.update();
@@ -73,6 +76,11 @@ public final class PopupDialog extends Dialog {
 		return this.result;
 	}
 	
+	private final void updateUI() {
+		Functions.setTextFor(this.shell, this.title + " - " + this.getParent().getText());
+		Functions.setShellImages(this.shell, Main.getShellImages());
+	}
+	
 	/** Create contents of the dialog. */
 	private void createContents(String message) {
 		this.shell = new Shell(getParent(), getStyle());
@@ -84,9 +92,9 @@ public final class PopupDialog extends Dialog {
 			}
 		});
 		this.shell.setSize(450, 177);
-		this.shell.setText("Server Message");
+		this.shell.setText(this.title + " - " + this.getParent().getText());
 		Functions.centerShell2OnShell1(getParent(), this.shell);
-		this.shell.setImages(Main.getDefaultShellImages());
+		this.shell.setImages(Main.getShellImages());
 		
 		this.message = new Text(this.shell, SWT.BORDER | SWT.READ_ONLY | SWT.WRAP | SWT.V_SCROLL | SWT.MULTI);
 		this.message.setBounds(10, 10, 424, 100);

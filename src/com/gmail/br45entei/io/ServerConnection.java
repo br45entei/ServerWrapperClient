@@ -1,5 +1,7 @@
 package com.gmail.br45entei.io;
 
+import com.gmail.br45entei.main.Main;
+import com.gmail.br45entei.swt.Functions;
 import com.gmail.br45entei.util.IOUtils;
 
 import java.io.IOException;
@@ -11,6 +13,8 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentLinkedQueue;
+
+import org.apache.commons.lang3.StringUtils;
 
 /** @author Brian_Entei */
 @SuppressWarnings("javadoc")
@@ -65,6 +69,11 @@ public final class ServerConnection {
 		this.out = new PrintWriter(new OutputStreamWriter(this.outStream, StandardCharsets.UTF_8), true);
 	}
 	
+	public final String getIpAddress() {
+		String addr = this.socket.getRemoteSocketAddress().toString();
+		return addr.contains("/") ? addr.substring(0, addr.indexOf("/")) : StringUtils.replaceOnce(addr, "/", "");
+	}
+	
 	/** @return True if this connection is alive */
 	public final boolean isAlive() {//boolean pingCheck) {//Default: false
 		/*pingCheck = false;
@@ -76,7 +85,7 @@ public final class ServerConnection {
 			}
 			return true;
 		}*/
-		return !this.socket.isClosed() && !this.socket.isOutputShutdown() && !this.socket.isInputShutdown();
+		return !this.socket.isClosed() && !this.socket.isOutputShutdown() && !this.socket.isInputShutdown() && !this.out.checkError();
 	}
 	
 	public final boolean close(String partingMessage) {
@@ -100,6 +109,17 @@ public final class ServerConnection {
 		} catch(Throwable ignored) {
 		}
 		return !this.isAlive();
+	}
+	
+	/** Lets the server know we're closing the connection, then gives it a
+	 * second before actually doing it.
+	 * 
+	 * @return True if this connection was successfully closed */
+	public final boolean closeNicely() {
+		this.out.println(Main.PROTOCOL + " -1 CLOSE");
+		this.out.flush();
+		Functions.sleep(1000L);
+		return this.close();
 	}
 	
 }

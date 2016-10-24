@@ -1,10 +1,14 @@
 package com.gmail.br45entei.main;
 
 import com.gmail.br45entei.data.DisposableByteArrayOutputStream;
+import com.gmail.br45entei.io.FTClient;
 import com.gmail.br45entei.io.ServerConnection;
 import com.gmail.br45entei.swt.Functions;
+import com.gmail.br45entei.swt.Response;
 import com.gmail.br45entei.util.StringUtil;
+import com.gmail.br45entei.util.StringUtil.EnumOS;
 
+import java.awt.Desktop;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -31,10 +35,13 @@ import org.eclipse.swt.events.ShellAdapter;
 import org.eclipse.swt.events.ShellEvent;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.ProgressBar;
@@ -56,7 +63,7 @@ public final class Main {
 	
 	public static final String								PROTOCOL_NAME			= "RemAdmin";
 	public static final String								PROTOCOL_DELIMITER		= "/";
-	public static final String								PROTOCOL_VERSION		= "1.01";
+	public static final String								PROTOCOL_VERSION		= "1.02";
 	
 	/** This application's networking protocol */
 	public static final String								PROTOCOL				= PROTOCOL_NAME + PROTOCOL_DELIMITER + PROTOCOL_VERSION;
@@ -77,6 +84,7 @@ public final class Main {
 	protected static Text									commandInput;
 	
 	protected static MenuItem								mntmExitaltF;
+	protected static MenuItem								mntmFileTransfer;
 	
 	protected static final ConcurrentLinkedQueue<String>	consoleLogs				= new ConcurrentLinkedQueue<>();
 	protected static final ConcurrentLinkedQueue<String>	consoleErrs				= new ConcurrentLinkedQueue<>();
@@ -115,6 +123,7 @@ public final class Main {
 	protected static Button						sendCmd;
 	
 	protected static volatile ServerConnection	server;
+	protected static volatile FTClient			ftClient				= null;
 	
 	protected static volatile boolean			attemptingConnection	= false;
 	protected static Button						btnConnectToServer;
@@ -139,12 +148,18 @@ public final class Main {
 	
 	private static volatile boolean				setCustomIconFromServer	= false;
 	
+	protected static volatile String			lastFTServerPath		= "/";
+	
 	public static final String getDefaultShellTitle() {
 		return "Server Wrapper Client - Version " + PROTOCOL_VERSION;
 	}
 	
 	public static final Image[] getDefaultShellImages() {
 		return new Image[] {SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-16x16.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-32x32.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-64x64.png"), SWTResourceManager.getImage(Functions.class, "/assets/textures/title/Entei-128x128.png")};
+	}
+	
+	public static final Image[] getShellImages() {
+		return shell.getImages();
 	}
 	
 	protected static final void clearLogsFromServer() {
@@ -156,7 +171,7 @@ public final class Main {
 		setLastErrLogTime(now);
 	}
 	
-	protected static final void addLogFromServer(String log) {
+	public static final void addLogFromServer(String log) {
 		if(log.trim().isEmpty() || log.trim().equals("COMMAND SENT")) {
 			return;
 		}
@@ -389,6 +404,8 @@ public final class Main {
 						clientUsername.setText(pvalue.equals("null") ? "" : pvalue);
 					} else if(pname.equalsIgnoreCase("password")) {
 						clientPassword.setText(pvalue.equals("null") ? "" : pvalue);
+					} else if(pname.equalsIgnoreCase("lastFTServerPath")) {
+						lastFTServerPath = pvalue;
 					}
 				}
 				return true;
@@ -410,6 +427,8 @@ public final class Main {
 				pr.println("port=" + serverPort.getSelection());
 				pr.println("username=" + clientUsername.getText());
 				pr.println("password=" + clientPassword.getText());
+				pr.println();
+				pr.println("lastFTServerPath=" + lastFTServerPath);
 				pr.flush();
 				return true;
 			} catch(Throwable e) {
@@ -500,10 +519,29 @@ public final class Main {
 			serverStateQuerier.start();
 			display = Display.getDefault();
 			shell = new Shell(display, SWT.SHELL_TRIM);
+			shell.addListener(SWT.Close, new Listener() {
+				@Override
+				public void handleEvent(Event event) {
+					event.doit = false;
+					if(ftClient != null) {
+						ftClient.setFocus();
+						ftClient.close();
+						ftClient = null;
+					}
+					if(!isAboutDialogOpen) {
+						shutdown();
+					}
+				}
+			});
 			shell.addShellListener(new ShellAdapter() {
 				@Override
 				public void shellClosed(ShellEvent e) {
 					e.doit = false;
+					if(ftClient != null) {
+						ftClient.setFocus();
+						ftClient.close();
+						ftClient = null;
+					}
 					if(!isAboutDialogOpen) {
 						shutdown();
 					}
@@ -536,7 +574,7 @@ public final class Main {
 		isRunning = false;
 	}
 	
-	protected static final void mainLoop() {
+	public static final void mainLoop() {
 		if(!checkThreadAccess()) {
 			Functions.sleep(10L);
 			return;
@@ -629,6 +667,10 @@ public final class Main {
 		Functions.setTextFor(shell, shellTitle);
 	}
 	
+	public static final String getShellTitle() {
+		return shell.getText();
+	}
+	
 	private static final void updateShellAppearance() {
 		setShellTitle();
 		setShellIcon();
@@ -678,6 +720,10 @@ public final class Main {
 		Functions.setSizeFor(ramUsageBar, ramUsageBarSize);
 	}
 	
+	public static final Shell getDialogShell() {
+		return (ftClient == null || ftClient.getShell().isDisposed()) ? shell : ftClient.getShell();
+	}
+	
 	public static final boolean isConnectedToServer() {
 		return server != null && server.isAlive(/*!attemptingConnection*/);
 	}
@@ -719,7 +765,7 @@ public final class Main {
 			if(!server.popupMessages.isEmpty()) {
 				final String message = server.popupMessages.poll();
 				System.out.println("New message: " + message);
-				PopupDialog dialog = new PopupDialog(shell, message);
+				PopupDialog dialog = new PopupDialog(getDialogShell(), "Server Message", message);
 				dialog.open();
 			}
 		}
@@ -898,6 +944,32 @@ public final class Main {
 		});
 		mntmExitaltF.setText("E&xit\t(Alt+F4)");
 		mntmExitaltF.setAccelerator(SWT.ALT | SWT.F4);
+		
+		mntmFileTransfer = new MenuItem(menu, SWT.NONE);
+		mntmFileTransfer.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				if(server == null) {
+					new PopupDialog(getDialogShell(), "Not connected to server", "Please connect to the server to use file transfer.").open();
+					return;
+				}
+				if(ftClient != null) {
+					ftClient.setFocus();
+				} else {
+					final FTClient client = ftClient = new FTClient(shell);
+					ftClient.currentFTpath = (lastFTServerPath == null || lastFTServerPath.isEmpty()) ? ftClient.currentFTpath : lastFTServerPath;
+					Response result = ftClient.open(server.ip, server.port, clientUsername.getText(), clientPassword.getText());
+					if(result == Response.NO_PERMS) {
+						new PopupDialog(shell, "Title.noperms", "Body.noperms").open();
+					} else if(result == Response.DISCONNECT) {
+						new PopupDialog(shell, "Title.disconnect", "Body.disconnect").open();
+					}
+					lastFTServerPath = client.currentFTpath;
+					ftClient = null;
+				}
+			}
+		});
+		mntmFileTransfer.setText("File Transfer...");
 		
 		MenuItem mntmAbout = new MenuItem(menu, SWT.NONE);
 		mntmAbout.addSelectionListener(new SelectionAdapter() {
@@ -1305,4 +1377,45 @@ public final class Main {
 			shell.setVisible(false);
 		}
 	}
+	
+	public static void showFileToUser(File file) {
+		if(file.isDirectory()) {
+			if(StringUtil.getOSType() == EnumOS.WINDOWS) {
+				try {
+					Runtime.getRuntime().exec("explorer.exe /select," + file.getAbsolutePath());
+				} catch(IOException e) {
+					try {
+						Desktop.getDesktop().browse(file.toURI());
+					} catch(IOException ignored) {
+						Program.launch(file.getAbsolutePath());
+					}
+				}
+			} else {
+				try {
+					Desktop.getDesktop().browse(file.getParentFile().toURI());
+				} catch(IOException ignored) {
+					Program.launch(file.getParentFile().getAbsolutePath());
+				}
+			}
+		} else if(file.isFile()) {
+			if(StringUtil.getOSType() == EnumOS.WINDOWS) {
+				try {
+					Runtime.getRuntime().exec("explorer.exe /select," + file.getAbsolutePath());
+				} catch(IOException e) {
+					try {
+						Desktop.getDesktop().browse(file.getParentFile().toURI());
+					} catch(IOException ignored) {
+						Program.launch(file.getParentFile().getAbsolutePath());
+					}
+				}
+			} else {
+				try {
+					Desktop.getDesktop().browse(file.getParentFile().toURI());
+				} catch(IOException ignored) {
+					Program.launch(file.getParentFile().getAbsolutePath());
+				}
+			}
+		}
+	}
+	
 }
