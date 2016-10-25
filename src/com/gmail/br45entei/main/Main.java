@@ -959,9 +959,6 @@ public final class Main {
 					final FTClient client = ftClient = new FTClient(shell);
 					ftClient.currentFTpath = (lastFTServerPath == null || lastFTServerPath.isEmpty()) ? ftClient.currentFTpath : lastFTServerPath;
 					Response result = ftClient.open(server.ip, server.port, clientUsername.getText(), clientPassword.getText());
-					if(result == Response.DISCONNECT) {
-						new PopupDialog(shell, "Title.disconnect", "Body.disconnect").open();
-					}
 					lastFTServerPath = client.currentFTpath;
 					ftClient = null;
 				}
