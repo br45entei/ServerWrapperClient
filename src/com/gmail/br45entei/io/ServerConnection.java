@@ -45,6 +45,8 @@ public final class ServerConnection {
 	public volatile long						serverRamCommit		= -1L;
 	public volatile int							serverNumOfThreads	= -1;
 	
+	private volatile IOException				trouble				= null;
+	
 	//=====
 	
 	@SuppressWarnings("resource")
@@ -74,6 +76,16 @@ public final class ServerConnection {
 		return addr.contains("/") ? addr.substring(0, addr.indexOf("/")) : StringUtils.replaceOnce(addr, "/", "");
 	}
 	
+	public final void println(String str) {
+		this.out.println(str);
+		this.out.flush();
+		try {
+			this.outStream.flush();
+		} catch(IOException e) {
+			this.trouble = e;
+		}
+	}
+	
 	/** @return True if this connection is alive */
 	public final boolean isAlive() {//boolean pingCheck) {//Default: false
 		/*pingCheck = false;
@@ -85,7 +97,11 @@ public final class ServerConnection {
 			}
 			return true;
 		}*/
-		return !this.socket.isClosed() && !this.socket.isOutputShutdown() && !this.socket.isInputShutdown() && !this.out.checkError();
+		return this.trouble == null && !this.socket.isClosed() && !this.socket.isOutputShutdown() && !this.socket.isInputShutdown() && !this.out.checkError();
+	}
+	
+	public final IOException getTrouble() {
+		return this.trouble;
 	}
 	
 	public final boolean close(String partingMessage) {

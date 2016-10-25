@@ -17,13 +17,17 @@ import java.awt.Desktop;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.net.ConnectException;
 import java.net.URLConnection;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
 import java.text.ParseException;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.regex.Pattern;
@@ -48,10 +52,8 @@ import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.DirectoryDialog;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Shell;
@@ -65,20 +67,33 @@ import org.eclipse.wb.swt.SWTResourceManager;
 @SuppressWarnings("javadoc")
 public class FTClient {
 	
-	protected volatile Response							result					= Response.NO_RESPONSE;
-	protected final Display								display;
-	protected final Shell								parent;
-	protected Shell										shell;
-	protected volatile ServerConnection					server;
-	protected final Thread								serverFTHandler;
-	protected final Thread								serverFileUploader;
-	private Label										lblDownloadText;
-	protected Tree										tree;
-	protected TreeColumn								trclmnName;
-	protected TreeColumn								trclmnSize;
-	protected TreeColumn								trclmnDate;
-	private Text										currentFTPath;
-	private Button										btnUpload;
+	protected volatile Response			result	= Response.NO_RESPONSE;
+	protected final Display				display;
+	protected final Shell				parent;
+	protected Shell						shell;
+	protected volatile ServerConnection	server;
+	protected final Thread				serverFTHandler;
+	protected final Thread				serverFileUploader;
+	private Label						lblDownloadText;
+	protected Tree						tree;
+	protected TreeColumn				trclmnName;
+	protected TreeColumn				trclmnSize;
+	protected TreeColumn				trclmnDate;
+	private Text						currentFTPath;
+	private Button						btnUpload;
+	
+	//======
+	
+	protected static enum TreeSortType {
+		DOWNLOAD,
+		FILENAME,
+		SIZE,
+		DATE;
+	}
+	
+	protected volatile TreeSortType						treeSortType			= TreeSortType.DOWNLOAD;
+	
+	//======
 	
 	protected volatile boolean							isClosed				= false;
 	protected final ConcurrentLinkedDeque<String>		cmdsToSendToServer		= new ConcurrentLinkedDeque<>();
@@ -93,7 +108,7 @@ public class FTClient {
 	
 	protected final ConcurrentLinkedDeque<File>			filesToUpload			= new ConcurrentLinkedDeque<>();
 	protected volatile boolean							batchUpload				= false;
-	protected volatile String							batchUploadOldPath		= "";
+	protected volatile String							batchUploadDesiredPath	= null;
 	protected final Property<Double>					uploadProgress			= new Property<>("UploadProgress", Double.valueOf(0.0D));
 	protected volatile IOException						uploadError				= null;
 	
@@ -112,12 +127,13 @@ public class FTClient {
 	
 	protected volatile String[]		fileListPaths		= new String[0];
 	protected volatile boolean		listDirty			= false;
+	protected volatile boolean		listTypeDirty		= false;
 	
 	protected volatile String		selectedFilePath	= null;
 	
 	//=======================================================
 	
-	private static final Image[]	icons				= new Image[17];
+	private static final Image[]	icons				= new Image[20];
 	private Button					btnRefresh;
 	private Button					btnNewFolder;
 	private Button					btnSetDownloadDirectory;
@@ -140,6 +156,9 @@ public class FTClient {
 		icons[14] = SWTResourceManager.getImage(Main.class, "/assets/textures/icons/control_play_video.png");
 		icons[15] = SWTResourceManager.getImage(Main.class, "/assets/textures/icons/audacity.exe.png");
 		icons[16] = SWTResourceManager.getImage(Main.class, "/assets/textures/icons/folder_add.png");
+		icons[17] = SWTResourceManager.getImage(Main.class, "/assets/textures/icons/report_key.png");
+		icons[18] = SWTResourceManager.getImage(Main.class, "/assets/textures/icons/table_key.png");
+		icons[19] = SWTResourceManager.getImage(Main.class, "/assets/textures/icons/page_white_data_loss.png");
 	}
 	
 	/** Create the dialog.
@@ -152,8 +171,8 @@ public class FTClient {
 		this.serverFTHandler = new Thread(new Runnable() {//Used for input purposes
 			@Override
 			public final void run() {
-				FTClient.this.server.out.println("DIR" + (FTClient.this.currentFTpath != null && !FTClient.this.currentFTpath.isEmpty() ? ": " + FTClient.this.currentFTpath : ""));
-				//FTClient.this.server.out.println("LIST");
+				FTClient.this.server.println("DIR" + (FTClient.this.currentFTpath != null && !FTClient.this.currentFTpath.isEmpty() ? ": " + FTClient.this.currentFTpath : ""));
+				//FTClient.this.server.println("LIST");
 				while(!FTClient.this.isClosed && FTClient.this.server != null && FTClient.this.server.isAlive()) {
 					if(!FTClient.this.handleServerData()) {
 						break;
@@ -178,18 +197,12 @@ public class FTClient {
 					if(FTClient.this.cmdsToSendToServer.size() > 0) {
 						String x;
 						while((x = FTClient.this.cmdsToSendToServer.poll()) != null) {
-							FTClient.this.server.out.println(x);
+							FTClient.this.server.println(x);
 						}
 					}
 					if(FTClient.this.filesToUpload != null && FTClient.this.filesToUpload.size() > 0) {
-						if(FTClient.this.batchUpload && FTClient.this.batchUploadOldPath.equals(FTClient.this.currentFTpath)) {
-							if(System.currentTimeMillis() - loopStart > 10L) {
-								Functions.sleep(10L);
-							}
-							continue;
-						}
 						if(FTClient.this.batchUpload) {
-							FTClient.this.server.out.println("NOPOPUPDIALOGS: true");
+							FTClient.this.server.println("NOPOPUPDIALOGS: true");
 						}
 						for(File fileToUpload : FTClient.this.filesToUpload) {
 							if(fileToUpload == null || !fileToUpload.isFile()) {
@@ -199,28 +212,36 @@ public class FTClient {
 								URLConnection url = fileToUpload.toURI().toURL().openConnection();
 								long size = url.getContentLengthLong();
 								if(size < Integer.MAX_VALUE) {
-									FTClient.this.server.out.println("FILE");
-									FTClient.this.server.out.flush();
+									if(FTClient.this.batchUploadDesiredPath != null) {
+										FTClient.this.server.println("MKDIRGODIR: " + FTClient.this.batchUploadDesiredPath);//currentFTpath);
+									}
+									FTClient.this.server.println("FILE");
 									FileTransfer.sendFile(fileToUpload, FTClient.this.server.outStream, FTClient.this.uploadProgress);
 								} else {
 									FTClient.this.showPopupMessage("Failed to upload file - File size too large", "Due to the limitations of a Java Integer,\r\nfile sizes larger than " + Functions.humanReadableByteCount(Integer.MAX_VALUE, false, 2) + " cannot be uploaded using this software.\r\nSorry!");
 								}
 								FTClient.this.filesToUpload.remove(fileToUpload);
+								try {
+									url.getInputStream().close();
+									url.getOutputStream().close();
+								} catch(IOException ignored) {
+								}
 							} catch(IOException e) {
 								FTClient.this.uploadError = e;
 							}
-							FTClient.this.server.out.println("LIST");
+							FTClient.this.server.println("LIST");
 						}
 						if(FTClient.this.batchUpload) {
-							FTClient.this.server.out.println("NOPOPUPDIALOGS: false");
+							FTClient.this.server.println("NOPOPUPDIALOGS: false");
 							FTClient.this.batchUpload = false;
+							FTClient.this.batchUploadDesiredPath = null;
 						}
 					}
 					if(System.currentTimeMillis() - loopStart > 10L) {
 						Functions.sleep(10L);
 					}
 				}
-				FTClient.this.result = Response.DISCONNECT;
+				FTClient.this.result = FTClient.this.result != Response.CLOSE ? Response.DISCONNECT : FTClient.this.result;
 			}
 		});
 		this.serverFileUploader.setDaemon(true);
@@ -270,7 +291,7 @@ public class FTClient {
 			} else if(line.startsWith("DIR: ")) {
 				String check = line.substring("DIR: ".length());
 				if(check.equals("null")) {
-					FTClient.this.server.out.println("DIR: /");
+					FTClient.this.server.println("DIR: /");
 				} else {
 					this.currentFTpath = check;
 				}
@@ -345,7 +366,7 @@ public class FTClient {
 				if(this.server.isAlive()) {
 					String authLine = "HelloIAm " + Base64.getEncoder().encodeToString((username + ":" + password).getBytes()).trim() + " " + Main.PROTOCOL + " FILETRANSFER";
 					System.out.println("File transfer connection to server \"" + ip + ":" + port + "\" successful. Authenticating...");// Sending authentication line: \"" + authLine + "\":");
-					this.server.out.println(authLine);
+					this.server.println(authLine);
 					this.server.out.flush();
 				}
 				final String response = StringUtil.readLine(this.server.in);
@@ -437,6 +458,51 @@ public class FTClient {
 		return this.result;
 	}
 	
+	private final TreeItem setItemInTree(String path) {
+		TreeItem item = new TreeItem(this.tree, SWT.NONE);
+		item.setText(path.split(Pattern.quote("?")));
+		String filePath = item.getText(0);
+		if(filePath.endsWith("/")) {
+			item.setImage(icons[0]);
+		} else {
+			String name = FilenameUtils.getName(filePath);
+			String ext = FilenameUtils.getExtension(filePath);
+			if(name.equalsIgnoreCase("settings.txt")) {
+				item.setImage(icons[4]);
+			} else if(ext.equalsIgnoreCase("txt") || ext.equalsIgnoreCase("log")) {
+				item.setImage(icons[2]);
+			} else if(ext.equalsIgnoreCase("yml") || ext.equalsIgnoreCase("yaml") || ext.equalsIgnoreCase("json")) {
+				item.setImage(icons[3]);
+			} else if(ext.equalsIgnoreCase("properties")) {
+				item.setImage(icons[4]);
+			} else if(ext.equalsIgnoreCase("dat") || ext.equalsIgnoreCase("mca") || ext.equalsIgnoreCase("mcr")) {
+				item.setImage(icons[7]);
+			} else if(ext.equalsIgnoreCase("lock")) {
+				item.setImage(icons[6]);
+			} else if(ext.equalsIgnoreCase("jar")) {
+				item.setImage(icons[9]);
+			} else if(ext.equalsIgnoreCase("zip") || ext.equalsIgnoreCase("7z") || ext.equalsIgnoreCase("gz")) {
+				item.setImage(icons[10]);
+			} else if(isImageFile(ext)) {
+				item.setImage(icons[12]);
+			} else if(isMusicFile(ext)) {
+				item.setImage(icons[ext.equalsIgnoreCase("aup") ? 15 : 13]);
+			} else if(isVideoFile(ext)) {
+				item.setImage(icons[14]);
+			} else if(ext.equalsIgnoreCase("cer") || ext.equalsIgnoreCase("der") || ext.equalsIgnoreCase("crt") || ext.equalsIgnoreCase("p7b") || ext.equalsIgnoreCase("p7r") || ext.equalsIgnoreCase("spc") || ext.equalsIgnoreCase("pfx") || ext.equalsIgnoreCase("p12")) {
+				item.setImage(icons[17]);
+			} else if(ext.equalsIgnoreCase("csr") || ext.equalsIgnoreCase("jks")) {
+				item.setImage(icons[18]);
+			} else if(ext.equalsIgnoreCase("old")) {
+				item.setImage(icons[19]);
+			} else {
+				item.setImage(icons[1]);
+			}
+		}
+		item.setText(0, filePath.length() <= this.currentFTpath.length() ? filePath : filePath.substring(this.currentFTpath.length()));
+		return item;
+	}
+	
 	private final void updateTree() {
 		if(this.batchUpload) {
 			return;
@@ -449,41 +515,103 @@ public class FTClient {
 			if(path == null || path.split(Pattern.quote("?")).length != 3) {
 				continue;
 			}
-			TreeItem item = new TreeItem(this.tree, SWT.NONE);
-			item.setText(path.split(Pattern.quote("?")));
-			String filePath = item.getText(0);
-			if(filePath.endsWith("/")) {
-				item.setImage(icons[0]);
-			} else {
-				String name = FilenameUtils.getName(filePath);
-				String ext = FilenameUtils.getExtension(filePath);
-				if(name.equalsIgnoreCase("settings.txt")) {
-					item.setImage(icons[4]);
-				} else if(ext.equalsIgnoreCase("txt") || ext.equalsIgnoreCase("log")) {
-					item.setImage(icons[2]);
-				} else if(ext.equalsIgnoreCase("yml") || ext.equalsIgnoreCase("yaml") || ext.equalsIgnoreCase("json")) {
-					item.setImage(icons[3]);
-				} else if(ext.equalsIgnoreCase("properties")) {
-					item.setImage(icons[4]);
-				} else if(ext.equalsIgnoreCase("dat") || ext.equalsIgnoreCase("mca") || ext.equalsIgnoreCase("mcr")) {
-					item.setImage(icons[7]);
-				} else if(ext.equalsIgnoreCase("lock")) {
-					item.setImage(icons[6]);
-				} else if(ext.equalsIgnoreCase("jar")) {
-					item.setImage(icons[9]);
-				} else if(ext.equalsIgnoreCase("zip") || ext.equalsIgnoreCase("7z") || ext.equalsIgnoreCase("gz")) {
-					item.setImage(icons[10]);
-				} else if(isImageFile(ext)) {
-					item.setImage(icons[12]);
-				} else if(isMusicFile(ext)) {
-					item.setImage(icons[ext.equalsIgnoreCase("aup") ? 15 : 13]);
-				} else if(isVideoFile(ext)) {
-					item.setImage(icons[14]);
-				} else {
-					item.setImage(icons[1]);
+			setItemInTree(path);
+		}
+	}
+	
+	private final void updateTreeOrder() {
+		if(this.treeSortType == TreeSortType.DOWNLOAD) {
+			this.updateTree();
+			return;
+		}
+		if(this.batchUpload) {
+			return;
+		}
+		this.tree.clearAll(true);
+		for(TreeItem item : this.tree.getItems()) {
+			item.dispose();
+		}
+		ArrayList<Integer> directories = new ArrayList<>();
+		//XXX Sort folders:
+		ArrayList<String> orderedDirs = new ArrayList<>();
+		int i = 0;
+		for(String path : this.fileListPaths) {
+			if(path == null || path.split(Pattern.quote("?")).length != 3) {
+				i++;
+				continue;
+			}
+			String[] split = path.split(Pattern.quote("?"));
+			if(split[0].endsWith("/")) {
+				//directories.add(Integer.valueOf(i));
+				String add = split[this.treeSortType == TreeSortType.DATE ? 2 : 0];
+				if(this.treeSortType == TreeSortType.DATE) {
+					String oldAdd = add;
+					try {
+						add = StringUtil.getCacheValidatorTimeFormat().parse(add).getTime() + "";
+					} catch(ParseException e) {
+						e.printStackTrace();
+						add = oldAdd;
+						this.treeSortType = TreeSortType.FILENAME;
+					}
+				}
+				orderedDirs.add(add + "-" + i);
+			}
+			i++;
+		}
+		orderedDirs.sort(this.treeSortType == TreeSortType.DATE ? CASE_INSENSITIVE_ORDER : String.CASE_INSENSITIVE_ORDER);
+		if(this.treeSortType == TreeSortType.FILENAME) {
+			Collections.reverse(orderedDirs);
+		}
+		for(String ordered : orderedDirs) {
+			directories.add(Integer.valueOf(ordered.substring(ordered.lastIndexOf("-") + 1)));
+		}
+		//XXX Sort files:
+		ArrayList<String> orderedList = new ArrayList<>();
+		i = 0;
+		for(String path : this.fileListPaths) {
+			if(path == null || path.split(Pattern.quote("?")).length != 3) {
+				i++;
+				continue;
+			}
+			String[] split = path.split(Pattern.quote("?"));
+			if(split[0].endsWith("/")) {
+				i++;
+				continue;
+			}
+			String add = split[this.treeSortType == TreeSortType.FILENAME ? 0 : this.treeSortType == TreeSortType.SIZE ? 1 : 2];
+			if(this.treeSortType == TreeSortType.SIZE) {
+				add = new BigDecimal(Functions.fromHumanReadableByteCount(add, true)).toPlainString();
+			} else if(this.treeSortType == TreeSortType.DATE) {
+				String oldAdd = add;
+				try {
+					add = StringUtil.getCacheValidatorTimeFormat().parse(add).getTime() + "";
+				} catch(ParseException e) {
+					e.printStackTrace();
+					add = oldAdd;
+					this.treeSortType = TreeSortType.FILENAME;
 				}
 			}
-			item.setText(0, filePath.length() <= this.currentFTpath.length() ? filePath : filePath.substring(this.currentFTpath.length()));
+			orderedList.add(add + "-" + i);
+			i++;
+		}
+		orderedList.sort(this.treeSortType == TreeSortType.SIZE || this.treeSortType == TreeSortType.DATE ? CASE_INSENSITIVE_ORDER : String.CASE_INSENSITIVE_ORDER);
+		if(this.treeSortType == TreeSortType.FILENAME) {
+			Collections.reverse(orderedList);
+		}
+		for(String ordered : orderedList) {
+			directories.add(Integer.valueOf(ordered.substring(ordered.lastIndexOf("-") + 1)));
+		}
+		//XXX Put it all together:
+		for(Integer index : directories) {
+			if(index == null || index.intValue() < 0 || index.intValue() >= this.fileListPaths.length) {
+				System.err.println("Warning: invalid index: " + index);
+				continue;
+			}
+			String path = this.fileListPaths[index.intValue()];
+			if(path == null || path.split(Pattern.quote("?")).length != 3) {
+				continue;
+			}
+			setItemInTree(path);
 		}
 	}
 	
@@ -503,6 +631,12 @@ public class FTClient {
 		if(this.listDirty) {
 			this.updateTree();
 			this.listDirty = false;
+			this.updateTreeOrder();
+			this.listTypeDirty = false;
+		}
+		if(this.listTypeDirty) {
+			this.updateTreeOrder();
+			this.listTypeDirty = false;
 		}
 		Functions.setTextFor(this.shell, "Server Files - " + Main.getShellTitle());
 		Functions.setShellImages(this.shell, Main.getShellImages());
@@ -589,9 +723,9 @@ public class FTClient {
 				if(filePath != null && !filePath.isEmpty()) {
 					File file = new File(filePath);
 					if(file.isDirectory()) {
-						FTClient.this.cmdsToSendToServer.add("MKDIRGODIR: " + file.getName());
+						//FTClient.this.cmdsToSendToServer.add("MKDIRGODIR: " + file.getName());
 						FTClient.this.batchUpload = true;
-						FTClient.this.batchUploadOldPath = FTClient.this.currentFTpath;
+						FTClient.this.batchUploadDesiredPath = FTClient.this.currentFTpath + file.getName() + "/";
 						for(File send : file.listFiles()) {
 							if(!Files.isReadable(Paths.get(send.toURI()))) {
 								continue;
@@ -652,6 +786,7 @@ public class FTClient {
 					FTClient.this.selectedFilePath = item.getText(0).equals("../") ? item.getText(0) : FTClient.this.currentFTpath + item.getText(0);
 				} else {
 					FTClient.this.selectedFilePath = null;
+					FTClient.this.tree.deselectAll();
 				}
 			}
 			
@@ -669,6 +804,7 @@ public class FTClient {
 					}
 				} else {
 					FTClient.this.selectedFilePath = null;
+					FTClient.this.tree.deselectAll();
 				}
 			}
 		});
@@ -684,15 +820,6 @@ public class FTClient {
 				}
 			}
 		});
-		this.shell.getDisplay().addFilter(SWT.HardKeyDown, new Listener() {
-			
-			@Override
-			public void handleEvent(Event e) {
-				if(((e.stateMask & SWT.CTRL) == SWT.CTRL) && (e.keyCode == 'f')) {
-					System.out.println("From Display I am the Key down !!" + e.keyCode);
-				}
-			}
-		});
 		this.tree.addTraverseListener(new TraverseListener() {
 			@Override
 			public void keyTraversed(TraverseEvent e) {
@@ -703,7 +830,6 @@ public class FTClient {
 				final TreeItem item = items[0];
 				if(e.keyCode == (SWT.ALT | '\r')) {
 					e.doit = false;
-					System.out.println("hai enters");
 				}
 				String fileName = item.getText(0);
 				final String filePath = FTClient.this.currentFTpath + fileName;
@@ -808,6 +934,7 @@ public class FTClient {
 				MenuItem newItem2 = new MenuItem(menu1, SWT.NONE);
 				newItem2.setText("Rename " + (fileName.endsWith("/") ? "folder" : "file") + "...");
 				newItem2.addSelectionListener(new SelectionAdapter() {
+					
 					@Override
 					public final void widgetSelected(SelectionEvent event) {
 						FTClient.this.cmdsToSendToServer.add("RENAME: " + filePath + "\r\n" + new RenameFileDialog(FTClient.this.shell).open(fileName.replace("/", "")));
@@ -825,16 +952,73 @@ public class FTClient {
 		});
 		
 		this.trclmnName = new TreeColumn(this.tree, SWT.NONE);
+		this.trclmnName.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				if(FTClient.this.treeSortType != TreeSortType.FILENAME) {
+					FTClient.this.treeSortType = TreeSortType.FILENAME;
+					FTClient.this.listTypeDirty = true;
+					FTClient.this.trclmnName.setText("Name \u25B2");
+					FTClient.this.trclmnSize.setText("Size");
+					FTClient.this.trclmnDate.setText("Date Modified");
+				} else {
+					final TreeSortType oldType = FTClient.this.treeSortType;
+					FTClient.this.treeSortType = TreeSortType.DOWNLOAD;
+					FTClient.this.listTypeDirty = oldType != TreeSortType.DOWNLOAD;
+					FTClient.this.trclmnName.setText("Name \u25BC");
+					FTClient.this.trclmnSize.setText("Size");
+					FTClient.this.trclmnDate.setText("Date Modified");
+				}
+			}
+		});
 		this.trclmnName.setResizable(false);
 		this.trclmnName.setWidth(this.shell.getSize().x - 295);
-		this.trclmnName.setText("Name");
+		this.trclmnName.setText("Name \u25BC");
 		
 		this.trclmnSize = new TreeColumn(this.tree, SWT.NONE);
+		this.trclmnSize.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				if(FTClient.this.treeSortType != TreeSortType.SIZE) {
+					FTClient.this.treeSortType = TreeSortType.SIZE;
+					FTClient.this.listTypeDirty = true;
+					FTClient.this.trclmnName.setText("Name");
+					FTClient.this.trclmnSize.setText("Size \u25BC");
+					FTClient.this.trclmnDate.setText("Date Modified");
+				} else {
+					final TreeSortType oldType = FTClient.this.treeSortType;
+					FTClient.this.treeSortType = TreeSortType.DOWNLOAD;
+					FTClient.this.listTypeDirty = oldType != TreeSortType.DOWNLOAD;
+					FTClient.this.trclmnName.setText("Name \u25BC");
+					FTClient.this.trclmnSize.setText("Size");
+					FTClient.this.trclmnDate.setText("Date Modified");
+				}
+			}
+		});
 		this.trclmnSize.setResizable(false);
 		this.trclmnSize.setWidth(85);
 		this.trclmnSize.setText("Size");
 		
 		this.trclmnDate = new TreeColumn(this.tree, SWT.NONE);
+		this.trclmnDate.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				if(FTClient.this.treeSortType != TreeSortType.DATE) {
+					FTClient.this.treeSortType = TreeSortType.DATE;
+					FTClient.this.listTypeDirty = true;
+					FTClient.this.trclmnName.setText("Name");
+					FTClient.this.trclmnSize.setText("Size");
+					FTClient.this.trclmnDate.setText("Date Modified \u25BC");
+				} else {
+					final TreeSortType oldType = FTClient.this.treeSortType;
+					FTClient.this.treeSortType = TreeSortType.DOWNLOAD;
+					FTClient.this.listTypeDirty = oldType != TreeSortType.DOWNLOAD;
+					FTClient.this.trclmnName.setText("Name \u25BC");
+					FTClient.this.trclmnSize.setText("Size");
+					FTClient.this.trclmnDate.setText("Date Modified");
+				}
+			}
+		});
 		this.trclmnDate.setResizable(false);
 		this.trclmnDate.setWidth(180);
 		this.trclmnDate.setText("Date Modified");
@@ -982,4 +1166,45 @@ public class FTClient {
 		label.setBounds(620, 66, 2, 23);
 		
 	}
+	
+	/** Use ONLY for Number strings! */
+	public static final Comparator<String> CASE_INSENSITIVE_ORDER = new CaseInsensitiveComparator();
+	
+	protected static class CaseInsensitiveComparator implements Comparator<String> {
+		
+		@Override
+		public int compare(String s1, String s2) {
+			if(s1.contains("-")) {
+				s1 = s1.substring(0, s1.lastIndexOf("-"));
+			}
+			if(s2.contains("-")) {
+				s2 = s2.substring(0, s2.lastIndexOf("-"));
+			}
+			double n1 = Double.valueOf(s1).doubleValue();
+			double n2 = Double.valueOf(s2).doubleValue();
+			return n1 < n2 ? -1 : (n1 == n2 ? 0 : 1);
+			/*int n1 = s1.length();
+			int n2 = s2.length();
+			int min = Math.min(n1, n2);
+			for(int i = 0; i < min; i++) {
+				char c1 = s1.charAt(i);
+				char c2 = s2.charAt(i);
+				if(c1 != c2) {
+					c1 = Character.toUpperCase(c1);
+					c2 = Character.toUpperCase(c2);
+					if(c1 != c2) {
+						c1 = Character.toLowerCase(c1);
+						c2 = Character.toLowerCase(c2);
+						if(c1 != c2) {
+							// No overflow because of numeric promotion
+							return c1 - c2;
+						}
+					}
+				}
+			}
+			return n1 - n2;*/
+		}
+		
+	}
+	
 }

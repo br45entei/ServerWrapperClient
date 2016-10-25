@@ -132,7 +132,7 @@ public final class Main {
 	protected static Button						btnStartServer;
 	protected static Button						btnStopServer;
 	protected static Button						btnRestartServer;
-	protected static Button						btnKillServ;
+	protected static Button						btnKillServer;
 	protected static Label						statusLabel;
 	protected static Label						verticalSeparator;
 	
@@ -690,12 +690,12 @@ public final class Main {
 		Point commandInputLocation = new Point(0, comTabSize.y - 25);
 		Point sendCmdLocation = new Point(comTabSize.x - sendCmd.getSize().x, comTabSize.y - sendCmd.getSize().y);
 		Point vertSepSize = new Point(2, shellSize.y - 69 - sizeYOffset);
-		Point btnStartLocation = new Point(btnStartServer.getLocation().x, shellSize.y - 116 - sizeYOffset);
-		Point btnStopLocation = new Point(btnStopServer.getLocation().x, shellSize.y - 116 - sizeYOffset);
+		Point btnStartLocation = new Point(btnStartServer.getLocation().x, shellSize.y - 147 - sizeYOffset);
+		Point btnStopLocation = new Point(btnStopServer.getLocation().x, shellSize.y - 147 - sizeYOffset);
 		Point btnRestartLocation = new Point(btnRestartServer.getLocation().x, shellSize.y - 116 - sizeYOffset);
-		Point btnKillLocation = new Point(btnKillServ.getLocation().x, shellSize.y - 116 - sizeYOffset);
+		Point btnKillLocation = new Point(btnKillServer.getLocation().x, shellSize.y - 116 - sizeYOffset);
 		Point statusLabelLocation = new Point(10, shellSize.y - 80 - sizeYOffset);
-		Point stackTraceOutSize = new Point(302, shellSize.y - 293 - sizeYOffset);
+		Point stackTraceOutSize = new Point(302, shellSize.y - 324 - sizeYOffset);
 		Point label2Location = new Point(10, shellSize.y - 84 - sizeYOffset);
 		
 		Functions.setSizeFor(cpuUsageComposite, new Point(resourceComTabSize.x - 20, cpuUsageComposite.getSize().y));
@@ -711,7 +711,7 @@ public final class Main {
 		Functions.setLocationFor(btnStartServer, btnStartLocation);
 		Functions.setLocationFor(btnStopServer, btnStopLocation);
 		Functions.setLocationFor(btnRestartServer, btnRestartLocation);
-		Functions.setLocationFor(btnKillServ, btnKillLocation);
+		Functions.setLocationFor(btnKillServer, btnKillLocation);
 		Functions.setLocationFor(statusLabel, statusLabelLocation);
 		Functions.setSizeFor(stackTraceOutput, stackTraceOutSize);
 		Functions.setLocationFor(label_2, label2Location);
@@ -839,7 +839,7 @@ public final class Main {
 		btnStartServer.setEnabled(isConnectedToServer() && server != null && !server.serverActive && server.serverJarSelected && !attemptingConnection);
 		btnStopServer.setEnabled(isConnectedToServer() && server != null && server.serverActive && !attemptingConnection);
 		btnRestartServer.setEnabled(isConnectedToServer() && server != null && server.serverActive && !attemptingConnection);
-		btnKillServ.setEnabled(isConnectedToServer() && server != null && server.serverActive && !attemptingConnection);
+		btnKillServer.setEnabled(isConnectedToServer() && server != null && server.serverActive && !attemptingConnection);
 		serverIP.setEnabled(!isConnectedToServer() && !attemptingConnection);
 		serverPort.setEnabled(!isConnectedToServer() && !attemptingConnection);
 		clientUsername.setEnabled(!isConnectedToServer() && !attemptingConnection);
@@ -959,9 +959,7 @@ public final class Main {
 					final FTClient client = ftClient = new FTClient(shell);
 					ftClient.currentFTpath = (lastFTServerPath == null || lastFTServerPath.isEmpty()) ? ftClient.currentFTpath : lastFTServerPath;
 					Response result = ftClient.open(server.ip, server.port, clientUsername.getText(), clientPassword.getText());
-					if(result == Response.NO_PERMS) {
-						new PopupDialog(shell, "Title.noperms", "Body.noperms").open();
-					} else if(result == Response.DISCONNECT) {
+					if(result == Response.DISCONNECT) {
 						new PopupDialog(shell, "Title.disconnect", "Body.disconnect").open();
 					}
 					lastFTServerPath = client.currentFTpath;
@@ -1024,8 +1022,9 @@ public final class Main {
 		stackTraceOutput.setBackground(SWTResourceManager.getColor(SWT.COLOR_WHITE));
 		stackTraceOutput.setEditable(false);
 		stackTraceOutput.setForeground(SWTResourceManager.getColor(SWT.COLOR_RED));
-		stackTraceOutput.setBounds(10, 171, 302, 167);
+		stackTraceOutput.setBounds(10, 171, 302, shell.getSize().y - 324);
 		
+		//XXX Shell size: 700, 460
 		btnStartServer = new Button(shell, SWT.NONE);
 		btnStartServer.addSelectionListener(new SelectionAdapter() {
 			@Override
@@ -1033,7 +1032,7 @@ public final class Main {
 				startRemoteServer = true;
 			}
 		});
-		btnStartServer.setBounds(10, 344, 76, 25);
+		btnStartServer.setBounds(10, shell.getSize().y - 147, 148, 25);
 		
 		btnStartServer.setText("Start Server");
 		
@@ -1044,7 +1043,7 @@ public final class Main {
 				stopRemoteServer = true;
 			}
 		});
-		btnStopServer.setBounds(92, 344, 76, 25);
+		btnStopServer.setBounds(164, shell.getSize().y - 147, 148, 25);
 		btnStopServer.setText("Stop Server");
 		
 		statusLabel = new Label(shell, SWT.NONE);
@@ -1058,18 +1057,18 @@ public final class Main {
 				restartRemoteServer = true;
 			}
 		});
-		btnRestartServer.setBounds(174, 344, 76, 25);
+		btnRestartServer.setBounds(10, shell.getSize().y - 116, 148, 25);
 		btnRestartServer.setText("Restart Server");
 		
-		btnKillServ = new Button(shell, SWT.NONE);
-		btnKillServ.addSelectionListener(new SelectionAdapter() {
+		btnKillServer = new Button(shell, SWT.NONE);
+		btnKillServer.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
 				killRemoteServer = true;
 			}
 		});
-		btnKillServ.setBounds(256, 344, 56, 25);
-		btnKillServ.setText("Kill Serv.");
+		btnKillServer.setBounds(164, shell.getSize().y - 116, 148, 25);
+		btnKillServer.setText("Kill Server");
 		
 		label_2 = new Label(shell, SWT.SEPARATOR | SWT.HORIZONTAL);
 		label_2.setBounds(10, 376, 302, 2);
