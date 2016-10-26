@@ -91,28 +91,37 @@ public class FTClient {
 		DATE;
 	}
 	
-	protected volatile TreeSortType						treeSortType			= TreeSortType.DOWNLOAD;
+	protected volatile TreeSortType						treeSortType				= TreeSortType.DOWNLOAD;
 	
 	//======
 	
-	protected volatile boolean							isClosed				= false;
-	protected final ConcurrentLinkedDeque<String>		cmdsToSendToServer		= new ConcurrentLinkedDeque<>();
+	protected volatile boolean							isClosed					= false;
+	protected final ConcurrentLinkedDeque<String>		cmdsToSendToServer			= new ConcurrentLinkedDeque<>();
 	
 	//=======================================================
 	
 	protected volatile File								downloadPath;
-	protected volatile File								lastDownloadedFile		= null;
-	protected volatile boolean							openDownloadedFile		= false;
+	protected volatile boolean							openDownloadFolder			= false;
+	protected volatile File								lastDownloadedFile			= null;
+	protected volatile boolean							openDownloadedFile			= false;
+	protected volatile boolean							batchDownload				= false;
+	protected final Property<Double>					batchDownloadPercentage		= new Property<>("BatchDownloadPercentComplete");
+	protected final Property<String>					batchDownloadFileName		= new Property<>("BatchDownloadFileName");
+	protected volatile UploadProgress					downloadProgressDialog		= null;
+	protected volatile int								numOfBatchFilesDownloaded	= 0;
+	protected volatile int								numOfBatchFoldersCreated	= 0;
 	
-	public volatile String								currentFTpath			= null;
+	protected volatile int								numOfFilesDeletedLocally	= 0;
 	
-	protected final ConcurrentLinkedDeque<File>			filesToUpload			= new ConcurrentLinkedDeque<>();
-	protected volatile boolean							batchUpload				= false;
-	protected volatile String							batchUploadDesiredPath	= null;
-	protected final Property<Double>					uploadProgress			= new Property<>("UploadProgress", Double.valueOf(0.0D));
-	protected volatile IOException						uploadError				= null;
+	public volatile String								currentFTpath				= null;
 	
-	protected final ConcurrentLinkedDeque<PopupMessage>	popupMessagesToDisplay	= new ConcurrentLinkedDeque<>();
+	protected final ConcurrentLinkedDeque<File>			filesToUpload				= new ConcurrentLinkedDeque<>();
+	protected volatile boolean							batchUpload					= false;
+	protected volatile String							batchUploadDesiredPath		= null;
+	protected final Property<Double>					uploadProgress				= new Property<>("UploadProgress", Double.valueOf(0.0D));
+	protected volatile IOException						uploadError					= null;
+	
+	protected final ConcurrentLinkedDeque<PopupMessage>	popupMessagesToDisplay		= new ConcurrentLinkedDeque<>();
 	
 	protected static final class PopupMessage {
 		public final String	title;
@@ -245,6 +254,8 @@ public class FTClient {
 			}
 		});
 		this.serverFileUploader.setDaemon(true);
+		this.batchDownloadPercentage.setValue(Double.valueOf(0.0D));
+		this.batchDownloadFileName.setValue("");
 	}
 	
 	public final void showPopupMessage(String title, String message) {
@@ -261,7 +272,31 @@ public class FTClient {
 			if(line.isEmpty()) {//probably a ping check
 				return true;
 			}
-			if(line.equals("FILE")) {
+			if(line.equals("GETALLFILES: END")) {
+				this.showPopupMessage("Server files downloaded", "Successfully downloaded " + this.numOfBatchFilesDownloaded + (this.numOfBatchFilesDownloaded == 1 ? " file" : " files") + " and " + this.numOfBatchFoldersCreated + (this.numOfBatchFoldersCreated == 1 ? " folder" : " folders") + " from the server.");
+				this.resetBatchDownload();
+				this.openDownloadFolder = true;
+			} else if(line.startsWith("GETALLFILES: ")) {
+				String percentCompleteFileName = line.substring("GETALLFILES: ".length());
+				String[] split = percentCompleteFileName.split(Pattern.quote(" "));
+				if(split.length >= 2) {
+					if(StringUtil.isStrDouble(split[0])) {
+						this.batchDownloadPercentage.setValue(Double.valueOf(split[0]));
+					} else {
+						System.err.println("Malformed percentage returned from server: " + split[0]);
+					}
+					this.batchDownloadFileName.setValue(StringUtil.stringArrayToString(split, ' ', 1));
+				}
+			} else if(line.startsWith("MKDIR: ")) {
+				String path = line.substring("MKDIR: ".length());
+				File folder = path.equals("/") ? this.downloadPath : new File(this.downloadPath, (path.startsWith("/") ? path.substring(1) : path).replace("/", File.separator));
+				if(!folder.exists()) {
+					folder.mkdirs();
+					if(this.batchDownload) {
+						this.numOfBatchFoldersCreated++;
+					}
+				}
+			} else if(line.equals("FILE")) {
 				FileData data = FileTransfer.readFile(this.server.in);
 				File folder = this.currentFTpath.equals("/") ? this.downloadPath : new File(this.downloadPath, (this.currentFTpath.startsWith("/") ? this.currentFTpath.substring(1) : this.currentFTpath).replace("/", File.separator));
 				if(!folder.exists()) {
@@ -275,19 +310,23 @@ public class FTClient {
 					this.showPopupMessage("Failed to download file", "The file \"" + data + "\" failed to save to disk!\r\nPlease try again.\r\n\r\nError details: " + e.getMessage());
 				}
 				Files.setLastModifiedTime(Paths.get(file.toURI()), FileTime.fromMillis(data.lastModified));//BasicFileAttributes attributes = Files.readAttributes(Paths.get(file.toURI()), BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-				if(this.openDownloadedFile) {
-					this.openDownloadedFile = false;
-					try {
-						Desktop.getDesktop().edit(file);
-					} catch(IOException e) {
-						if(!Program.launch(file.getAbsolutePath(), folder.getAbsolutePath())) {
-							Desktop.getDesktop().open(file);
+				if(!this.batchDownload) {
+					if(this.openDownloadedFile) {
+						this.openDownloadedFile = false;
+						try {
+							Desktop.getDesktop().edit(file);
+						} catch(IOException e) {
+							if(!Program.launch(file.getAbsolutePath(), folder.getAbsolutePath())) {
+								Desktop.getDesktop().open(file);
+							}
 						}
+					} else {
+						Main.showFileToUser(file);
 					}
+					this.lastDownloadedFile = file;
 				} else {
-					Main.showFileToUser(file);
+					this.numOfBatchFilesDownloaded++;
 				}
-				this.lastDownloadedFile = file;
 			} else if(line.startsWith("DIR: ")) {
 				String check = line.substring("DIR: ".length());
 				if(check.equals("null")) {
@@ -315,6 +354,20 @@ public class FTClient {
 		return continueData;
 	}
 	
+	protected final void resetBatchDownload() {
+		this.batchDownload = false;
+		this.numOfBatchFilesDownloaded = 0;
+		this.numOfBatchFoldersCreated = 0;
+		this.batchDownloadPercentage.setValue(Double.valueOf(0.0D));
+		this.batchDownloadFileName.setValue("");
+		if(!this.batchDownload) {
+			if(this.downloadProgressDialog != null) {
+				this.downloadProgressDialog.close();
+				this.downloadProgressDialog = null;
+			}
+		}
+	}
+	
 	private final boolean handleProtocolMessage(String line) {
 		if(line == null) {
 			return false;
@@ -327,6 +380,9 @@ public class FTClient {
 		}
 		if(line.equals(Main.PROTOCOL + " 47 FILESYSTEM OBJECT ALREADY EXISTS")) {
 			this.showPopupMessage("Error creating file/folder", "That file or folder already exists.\r\nPlease choose another name.");
+		} else if(line.startsWith(Main.PROTOCOL + " 47 FILESYSTEM OBJECT NAME CONFLICT: ")) {
+			String conflictingName = line.substring((Main.PROTOCOL + " 47 FILESYSTEM OBJECT NAME CONFLICT: ").length());
+			this.showPopupMessage("Error renaming file/folder", "There is already a file or folder with the name: " + conflictingName + "\r\nPlease choose another name.");
 		} else if(line.startsWith(Main.PROTOCOL + " 28 USER ALREADY CONNECTED: ")) {
 			this.showPopupMessage("Connection Error", "The server reports you are already logged into the File Transfer window.\r\nTry disconnecting and reconnecting to fix the problem.");
 		} else {
@@ -349,6 +405,11 @@ public class FTClient {
 	
 	public final void close() {
 		this.result = Response.CLOSE;
+		if(Main.checkThreadAccess()) {
+			for(Shell shell : this.shell.getShells()) {
+				shell.dispose();
+			}
+		}
 	}
 	
 	public final File getDefaultDownloadPath() {
@@ -617,11 +678,19 @@ public class FTClient {
 	
 	private final void updateUI() {
 		Functions.setTextFor(this.lblDownloadText, this.downloadPath.getAbsolutePath());
-		Functions.setTextFor(this.currentFTPath, this.currentFTpath);
+		Functions.setTextFor(this.currentFTPath, this.batchDownload ? "[Downloading from: " + this.currentFTpath + " ...]" : this.currentFTpath);
 		if(!this.popupMessagesToDisplay.isEmpty()) {
 			PopupMessage message = this.popupMessagesToDisplay.poll();
 			if(message != null) {
 				new PopupDialog(this.shell, message.title, message.message).open();
+				if(this.openDownloadFolder) {
+					this.openDownloadFolder = false;
+					try {
+						Desktop.getDesktop().browse(FTClient.this.downloadPath.toURI());
+					} catch(IOException e1) {
+						Program.launch(FTClient.this.downloadPath.getAbsolutePath());
+					}
+				}
 			}
 		}
 		if(this.uploadError != null) {
@@ -654,6 +723,17 @@ public class FTClient {
 		final int treeColumnNameWidth = this.shell.getSize().x - 295;
 		if(this.trclmnName.getWidth() != treeColumnNameWidth) {
 			this.trclmnName.setWidth(treeColumnNameWidth);
+		}
+		if(!this.batchDownload) {
+			if(this.downloadProgressDialog != null) {
+				this.downloadProgressDialog.close();
+				this.downloadProgressDialog = null;
+			}
+		} else {
+			if(this.downloadProgressDialog == null) {
+				this.downloadProgressDialog = new UploadProgress(this.shell, false, this.batchDownloadPercentage, this.batchDownloadFileName);
+				this.downloadProgressDialog.open();
+			}
 		}
 	}
 	
@@ -736,7 +816,19 @@ public class FTClient {
 				}
 			}
 		});
-		mntmUploadFolderTo.setText("Upload folder to current directory...");
+		mntmUploadFolderTo.setText("&Upload folder to current directory...");
+		
+		MenuItem mntmDownloadAllServer = new MenuItem(menu_1, SWT.NONE);
+		mntmDownloadAllServer.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				FTClient.this.openDownloadedFile = false;
+				FTClient.this.resetBatchDownload();
+				FTClient.this.batchDownload = true;
+				FTClient.this.cmdsToSendToServer.add("GETALLFILES");
+			}
+		});
+		mntmDownloadAllServer.setText("&Download all server files...");
 		
 		new MenuItem(menu_1, SWT.SEPARATOR);
 		
@@ -744,10 +836,21 @@ public class FTClient {
 		mntmdeleteLocalServer.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
-				for(File file : getDefaultDownloadPath().listFiles()) {
-					if(!FileDeleteStrategy.FORCE.deleteQuietly(file)) {
-						file.deleteOnExit();
+				Response deleteFiles = new ConfirmDeleteLocalFilesDialog(FTClient.this.shell).open(FTClient.this.downloadPath.getAbsolutePath());
+				if(deleteFiles == Response.YES) {
+					for(File file : getDefaultDownloadPath().listFiles()) {
+						if(!FileDeleteStrategy.FORCE.deleteQuietly(file)) {
+							file.deleteOnExit();
+						} else {
+							FTClient.this.numOfFilesDeletedLocally++;
+						}
 					}
+					if(FTClient.this.numOfFilesDeletedLocally > 0) {
+						showPopupMessage("Local file deletion", "Successfully deleted " + FTClient.this.numOfFilesDeletedLocally + " local " + (FTClient.this.numOfFilesDeletedLocally == 1 ? "file" : "folders and files") + " from disk.");
+					} else {
+						showPopupMessage("Local file deletion", "There were no local files found to delete.");
+					}
+					FTClient.this.numOfFilesDeletedLocally = 0;
 				}
 			}
 		});
@@ -945,7 +1048,10 @@ public class FTClient {
 				newItem3.addSelectionListener(new SelectionAdapter() {
 					@Override
 					public final void widgetSelected(SelectionEvent event) {
-						FTClient.this.cmdsToSendToServer.add("DELETE: " + filePath);
+						Response delete = new ConfirmDeleteServerFileDialog(FTClient.this.shell).open(fileName);
+						if(delete == Response.YES) {
+							FTClient.this.cmdsToSendToServer.add("DELETE: " + filePath);
+						}
 					}
 				});
 			}
@@ -1053,7 +1159,7 @@ public class FTClient {
 					File check = new File(filePath);
 					if(check.isFile()) {
 						FTClient.this.filesToUpload.add(check);
-						new UploadProgress(FTClient.this.shell, FTClient.this.uploadProgress, check.getName()).open();
+						new UploadProgress(FTClient.this.shell, true, FTClient.this.uploadProgress, new Property<>("FileName", check.getName())).open();
 					}
 				}
 			}
@@ -1206,5 +1312,4 @@ public class FTClient {
 		}
 		
 	}
-	
 }

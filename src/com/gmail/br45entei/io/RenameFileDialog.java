@@ -50,6 +50,7 @@ public class RenameFileDialog extends Dialog {
 		createContents();
 		this.shell.open();
 		this.shell.layout();
+		this.text.setFocus();
 		Display display = getParent().getDisplay();
 		while(!this.shell.isDisposed()) {
 			if(runFromMain) {
@@ -127,6 +128,7 @@ public class RenameFileDialog extends Dialog {
 		
 		this.text = new Text(this.shell, SWT.BORDER);
 		this.text.setBounds(10, 56, 424, 19);
-		
+		this.text.setText(this.originalName);
+		this.text.selectAll();
 	}
 }

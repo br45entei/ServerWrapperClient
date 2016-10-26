@@ -26,14 +26,19 @@ public class UploadProgress extends Dialog {
 	protected Response				result		= Response.NO_RESPONSE;
 	protected Shell					shell;
 	private final Property<Double>	progress;
+	private final Property<String>	fileName;
 	private ProgressBar				progressBar;
+	private Label					lblUploadingFile;
+	private final boolean			upload;
 	
 	/** Create the dialog. */
-	public UploadProgress(Shell parent, Property<Double> progress, String fileName) {
+	public UploadProgress(Shell parent, boolean uploadOrDownload, Property<Double> progress, Property<String> fileName) {
 		super(parent, SWT.DIALOG_TRIM);
 		setText("SWT Dialog");
 		this.progress = progress;
-		this.createContents(fileName);
+		this.fileName = fileName == null ? new Property<>("") : fileName;
+		this.upload = uploadOrDownload;
+		this.createContents();
 	}
 	
 	/** Open the dialog.
@@ -67,12 +72,13 @@ public class UploadProgress extends Dialog {
 		if(this.progressBar.getSelection() != selection) {
 			this.progressBar.setSelection(selection);
 		}
-		Functions.setTextFor(this.shell, "File upload progress - " + this.getParent().getText());
+		Functions.setTextFor(this.lblUploadingFile, (this.upload ? "Upload" : "Download") + "ing file \"" + this.fileName.getValue() + "\":");
+		Functions.setTextFor(this.shell, "File " + (this.upload ? "upload" : "download") + " progress - " + this.getParent().getText());
 		Functions.setShellImages(this.shell, Main.getShellImages());
 	}
 	
 	/** Create contents of the dialog. */
-	private void createContents(String fileName) {
+	private void createContents() {
 		this.shell = new Shell(this.getParent(), SWT.DIALOG_TRIM);
 		this.shell.addTraverseListener(new TraverseListener() {
 			@Override
@@ -82,7 +88,7 @@ public class UploadProgress extends Dialog {
 				}
 			}
 		});
-		this.shell.setText("File upload progress - " + this.getParent().getText());
+		this.shell.setText("File " + (this.upload ? "upload" : "download") + " progress - " + this.getParent().getText());
 		this.shell.addShellListener(new ShellAdapter() {
 			@Override
 			public void shellClosed(ShellEvent e) {
@@ -94,12 +100,16 @@ public class UploadProgress extends Dialog {
 		Functions.centerShell2OnShell1(this.getParent(), this.shell);
 		this.shell.setImages(Main.getShellImages());
 		
-		Label lblUploadingFile = new Label(this.shell, SWT.BORDER | SWT.WRAP);
-		lblUploadingFile.setBounds(10, 10, 394, 49);
-		lblUploadingFile.setText("Uploading file \"" + fileName + "\":");
+		this.lblUploadingFile = new Label(this.shell, SWT.BORDER | SWT.WRAP);
+		this.lblUploadingFile.setBounds(10, 10, 394, 49);
+		this.lblUploadingFile.setText((this.upload ? "Upload" : "Download") + "ing file \"" + this.fileName.getValue() + "\":");
 		
 		this.progressBar = new ProgressBar(this.shell, SWT.NONE);
 		this.progressBar.setBounds(10, 65, 394, 18);
+	}
+	
+	public final void close() {
+		this.result = Response.CLOSE;
 	}
 	
 }
