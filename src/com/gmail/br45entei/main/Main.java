@@ -5,6 +5,12 @@ import com.gmail.br45entei.io.FTClient;
 import com.gmail.br45entei.io.ServerConnection;
 import com.gmail.br45entei.swt.Functions;
 import com.gmail.br45entei.swt.Response;
+import com.gmail.br45entei.update.PerformUpdateDialog;
+import com.gmail.br45entei.update.PromptDownloadUpdateDialog;
+import com.gmail.br45entei.update.UpdateCheckerDialog;
+import com.gmail.br45entei.update.UpdateChecker.UpdateResult;
+import com.gmail.br45entei.update.UpdateChecker.UpdateType;
+import com.gmail.br45entei.util.JavaProgramArguments;
 import com.gmail.br45entei.util.StringUtil;
 import com.gmail.br45entei.util.StringUtil.EnumOS;
 
@@ -55,6 +61,12 @@ import org.eclipse.wb.swt.SWTResourceManager;
 /** @author Brian_Entei */
 @SuppressWarnings("javadoc")
 public final class Main {
+	
+	private static volatile JavaProgramArguments arguments;
+	
+	public static final JavaProgramArguments getSysArgs() {
+		return arguments;
+	}
 	
 	public static final boolean								debug					= false;
 	
@@ -118,14 +130,14 @@ public final class Main {
 		lastErrLogTime = time;
 	}
 	
-	protected static volatile String			errorStr				= null;
+	protected static volatile String			errorStr					= null;
 	
 	protected static Button						sendCmd;
 	
 	protected static volatile ServerConnection	server;
-	protected static volatile FTClient			ftClient				= null;
+	protected static volatile FTClient			ftClient					= null;
 	
-	protected static volatile boolean			attemptingConnection	= false;
+	protected static volatile boolean			attemptingConnection		= false;
 	protected static Button						btnConnectToServer;
 	protected static Button						btnDisconnectFromServer;
 	protected static StyledText					stackTraceOutput;
@@ -136,19 +148,20 @@ public final class Main {
 	protected static Label						statusLabel;
 	protected static Label						verticalSeparator;
 	
-	protected static volatile boolean			startRemoteServer		= false;
-	protected static volatile boolean			stopRemoteServer		= false;
-	protected static volatile boolean			restartRemoteServer		= false;
-	protected static volatile boolean			killRemoteServer		= false;
+	protected static volatile boolean			startRemoteServer			= false;
+	protected static volatile boolean			stopRemoteServer			= false;
+	protected static volatile boolean			restartRemoteServer			= false;
+	protected static volatile boolean			killRemoteServer			= false;
 	
-	protected static volatile boolean			isAboutDialogOpen		= false;
+	protected static volatile boolean			isAboutDialogOpen			= false;
 	
-	private static volatile long				lastServerStateQuery	= 0L;
-	private static volatile long				lastServerResourceQuery	= 0L;
+	private static volatile long				lastServerStateQuery		= 0L;
+	private static volatile long				lastServerResourceQuery		= 0L;
 	
-	private static volatile boolean				setCustomIconFromServer	= false;
+	private static volatile boolean				setCustomIconFromServer		= false;
 	
-	protected static volatile String			lastFTServerPath		= "/";
+	protected static volatile String			lastFTServerPath			= "/";
+	public static volatile File					lastFTServerDownloadFolder	= null;
 	
 	public static final String getDefaultShellTitle() {
 		return "Server Wrapper Client - Version " + PROTOCOL_VERSION;
@@ -212,6 +225,7 @@ public final class Main {
 	private static Composite			resourceTabComposite;
 	private static Composite			cpuUsageComposite;
 	private static Composite			ramUsageComposite;
+	private static MenuItem				mntmCheckForUpdates;
 	
 	protected static final boolean handleServerData(String data) throws Throwable {
 		if(data != null) {
@@ -406,6 +420,11 @@ public final class Main {
 						clientPassword.setText(pvalue.equals("null") ? "" : pvalue);
 					} else if(pname.equalsIgnoreCase("lastFTServerPath")) {
 						lastFTServerPath = pvalue;
+					} else if(pname.equalsIgnoreCase("lastFTServerDownloadFolder")) {
+						if(!pvalue.trim().isEmpty()) {
+							File check = new File(pvalue);
+							lastFTServerDownloadFolder = check.isDirectory() ? check : null;
+						}
 					}
 				}
 				return true;
@@ -429,6 +448,7 @@ public final class Main {
 				pr.println("password=" + clientPassword.getText());
 				pr.println();
 				pr.println("lastFTServerPath=" + lastFTServerPath);
+				pr.println("lastFTServerDownloadFolder=" + (lastFTServerDownloadFolder == null ? "" : lastFTServerDownloadFolder.getAbsolutePath()));
 				pr.flush();
 				return true;
 			} catch(Throwable e) {
@@ -445,6 +465,8 @@ public final class Main {
 	 * 
 	 * @param args System command arguments */
 	public static void main(String[] args) {
+		JavaProgramArguments.initializeFromMainClass(Main.class, args);
+		arguments = JavaProgramArguments.getArguments();
 		swtThread = Thread.currentThread();
 		try {
 			Thread consoleLogUpdaterThread = new Thread() {
@@ -956,15 +978,46 @@ public final class Main {
 				if(ftClient != null) {
 					ftClient.setFocus();
 				} else {
-					final FTClient client = ftClient = new FTClient(shell);
+					final FTClient client = ftClient = new FTClient(shell).setDownloadPath(lastFTServerDownloadFolder);
 					ftClient.currentFTpath = (lastFTServerPath == null || lastFTServerPath.isEmpty()) ? ftClient.currentFTpath : lastFTServerPath;
 					Response result = ftClient.open(server.ip, server.port, clientUsername.getText(), clientPassword.getText());
 					lastFTServerPath = client.currentFTpath;
+					lastFTServerDownloadFolder = ftClient.getDownloadPath();
 					ftClient = null;
+					saveSettings();
 				}
 			}
 		});
 		mntmFileTransfer.setText("File Transfer...");
+		
+		mntmCheckForUpdates = new MenuItem(menu, SWT.NONE);
+		mntmCheckForUpdates.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				UpdateResult result = new UpdateCheckerDialog(shell).open();
+				if(result.type == UpdateType.AVAILABLE) {
+					File check = JavaProgramArguments.getClassPathJarFile();
+					if(check.getName().endsWith(".class")) {
+						new PopupDialog(shell, "Update Results", "Heya! It looks like you're running this in a development environment.\r\nI can't overwrite a .jar if there isn't one!\r\nDisplaying normal output:\r\n\r\nThere is an update available!\r\nSize to download: " + Functions.humanReadableByteCount(result.fileSize, true, 2)).open();
+					} else {
+						PromptDownloadUpdateDialog dialog = new PromptDownloadUpdateDialog(shell);
+						Response response = dialog.open("There is an update available!\r\nSize to download: " + Functions.humanReadableByteCount(result.fileSize, true, 2));
+						if(response == Response.YES) {
+							new PerformUpdateDialog(shell).open();
+							//we're still here?!
+							new PopupDialog(shell, "Update Warning", "Automatic update seems to have failed.\r\nYou may need to close and re-open this client.").open();
+						}
+					}
+				} else if(result.type == UpdateType.UP_TO_DATE) {
+					new PopupDialog(shell, "Update Results", "You are running the latest version of ServerWrapperClient.").open();
+				} else if(result.type == UpdateType.NO_CONNECTION) {
+					new PopupDialog(shell, "Update Results", "Unable to contact the update server; is the server down?\r\n\r\nPlease try again later.").open();
+				} else {
+					new PopupDialog(shell, "Update Results", "Unable to check for updates: An unknown error occurred.").open();
+				}
+			}
+		});
+		mntmCheckForUpdates.setText("Check for Updates...");
 		
 		MenuItem mntmAbout = new MenuItem(menu, SWT.NONE);
 		mntmAbout.addSelectionListener(new SelectionAdapter() {

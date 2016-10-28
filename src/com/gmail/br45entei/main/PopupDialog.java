@@ -58,7 +58,7 @@ public final class PopupDialog extends Dialog {
 		Display display = getParent().getDisplay();
 		while(!this.shell.isDisposed()) {
 			if(runFromMain) {
-				Main.runClock();
+				Main.mainLoop();//updateUI();
 				this.updateUI();
 			} else {
 				if(!display.readAndDispatch()) {

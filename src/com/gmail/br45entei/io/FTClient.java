@@ -100,7 +100,7 @@ public class FTClient {
 	
 	//=======================================================
 	
-	protected volatile File								downloadPath;
+	protected volatile File								downloadPath				= null;
 	protected volatile boolean							openDownloadFolder			= false;
 	protected volatile File								lastDownloadedFile			= null;
 	protected volatile boolean							openDownloadedFile			= false;
@@ -289,7 +289,7 @@ public class FTClient {
 				}
 			} else if(line.startsWith("MKDIR: ")) {
 				String path = line.substring("MKDIR: ".length());
-				File folder = path.equals("/") ? this.downloadPath : new File(this.downloadPath, (path.startsWith("/") ? path.substring(1) : path).replace("/", File.separator));
+				File folder = path.equals("/") ? this.getDownloadPathForServerFiles() : new File(this.getDownloadPathForServerFiles(), (path.startsWith("/") ? path.substring(1) : path).replace("/", File.separator));
 				if(!folder.exists()) {
 					folder.mkdirs();
 					if(this.batchDownload) {
@@ -298,7 +298,7 @@ public class FTClient {
 				}
 			} else if(line.equals("FILE")) {
 				FileData data = FileTransfer.readFile(this.server.in);
-				File folder = this.currentFTpath.equals("/") ? this.downloadPath : new File(this.downloadPath, (this.currentFTpath.startsWith("/") ? this.currentFTpath.substring(1) : this.currentFTpath).replace("/", File.separator));
+				File folder = this.currentFTpath.equals("/") ? this.getDownloadPathForServerFiles() : new File(this.getDownloadPathForServerFiles(), (this.currentFTpath.startsWith("/") ? this.currentFTpath.substring(1) : this.currentFTpath).replace("/", File.separator));
 				if(!folder.exists()) {
 					folder.mkdirs();
 				}
@@ -412,8 +412,46 @@ public class FTClient {
 		}
 	}
 	
-	public final File getDefaultDownloadPath() {
-		return new File(Main.rootDir, "ServerFiles" + File.separator + AddressUtil.getClientAddressNoPort(this.server.getIpAddress()));
+	public final FTClient setDownloadPath(File file) {
+		if(file == null) {
+			file = this.getDownloadPath();
+		}
+		this.downloadPath = file;
+		return this;
+	}
+	
+	public final void resetDownloadPath() {
+		Main.lastFTServerDownloadFolder = null;
+		this.downloadPath = getDefaultDownloadPath();
+	}
+	
+	public final File getDownloadPath() {
+		this.downloadPath = (this.downloadPath == null ? getDefaultDownloadPath() : this.downloadPath);
+		return this.downloadPath;
+	}
+	
+	public final File getDownloadPathForServerFiles() {
+		return new File(this.getDownloadPath(), AddressUtil.getClientAddressNoPort(this.server.getIpAddress()));
+	}
+	
+	public static final File getDefaultDownloadPath() {
+		return Main.lastFTServerDownloadFolder == null ? new File(Main.rootDir, "ServerFiles") : Main.lastFTServerDownloadFolder;
+	}
+	
+	public final void deleteLocalServerFiles() {
+		for(File file : getDefaultDownloadPath().listFiles()) {
+			if(!FileDeleteStrategy.FORCE.deleteQuietly(file)) {
+				file.deleteOnExit();
+			} else {
+				this.numOfFilesDeletedLocally++;
+			}
+		}
+		if(this.numOfFilesDeletedLocally > 0) {
+			this.showPopupMessage("Local file deletion", "Successfully deleted " + this.numOfFilesDeletedLocally + " local " + (this.numOfFilesDeletedLocally == 1 ? "file" : "folders and files") + " from disk.");
+		} else {
+			this.showPopupMessage("Local file deletion", "There were no local files found to delete.");
+		}
+		this.numOfFilesDeletedLocally = 0;
 	}
 	
 	/** Open the dialog.
@@ -444,9 +482,9 @@ public class FTClient {
 				} else {
 					if(response.equals(Main.PROTOCOL + " 43 FILETRANSFER CONNECTION ESTABLISHED")) {
 						Main.addLogFromServer("File transfer connection established!");
-						this.downloadPath = this.getDefaultDownloadPath();
-						if(!this.downloadPath.exists()) {
-							this.downloadPath.mkdirs();
+						File downloadPath = this.getDownloadPathForServerFiles();
+						if(!downloadPath.exists()) {
+							downloadPath.mkdirs();
 						}
 						this.serverFTHandler.start();
 						this.serverFileUploader.start();
@@ -677,7 +715,7 @@ public class FTClient {
 	}
 	
 	private final void updateUI() {
-		Functions.setTextFor(this.lblDownloadText, this.downloadPath.getAbsolutePath());
+		Functions.setTextFor(this.lblDownloadText, this.getDownloadPathForServerFiles().getAbsolutePath());
 		Functions.setTextFor(this.currentFTPath, this.batchDownload ? "[Downloading from: " + this.currentFTpath + " ...]" : this.currentFTpath);
 		if(!this.popupMessagesToDisplay.isEmpty()) {
 			PopupMessage message = this.popupMessagesToDisplay.poll();
@@ -686,9 +724,9 @@ public class FTClient {
 				if(this.openDownloadFolder) {
 					this.openDownloadFolder = false;
 					try {
-						Desktop.getDesktop().browse(FTClient.this.downloadPath.toURI());
+						Desktop.getDesktop().browse(FTClient.this.getDownloadPathForServerFiles().toURI());
 					} catch(IOException e1) {
-						Program.launch(FTClient.this.downloadPath.getAbsolutePath());
+						Program.launch(FTClient.this.getDownloadPathForServerFiles().getAbsolutePath());
 					}
 				}
 			}
@@ -796,7 +834,7 @@ public class FTClient {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
 				DirectoryDialog dialog = new DirectoryDialog(FTClient.this.shell);
-				dialog.setFilterPath(FTClient.this.downloadPath.getAbsolutePath());
+				dialog.setFilterPath(FTClient.this.getDownloadPathForServerFiles().getAbsolutePath());
 				dialog.setText("Choose folder to upload");
 				dialog.setMessage("Choose the folder whose contents you would like uploaded to the server.");
 				String filePath = dialog.open();
@@ -818,6 +856,22 @@ public class FTClient {
 		});
 		mntmUploadFolderTo.setText("&Upload folder to current directory...");
 		
+		MenuItem mntmResetDownloadDirectory = new MenuItem(menu_1, SWT.NONE);
+		mntmResetDownloadDirectory.addSelectionListener(new SelectionAdapter() {
+			@Override
+			public void widgetSelected(SelectionEvent e) {
+				Response result = new PromptDeleteLocalFilesDialog(FTClient.this.shell).open(FTClient.this.getDownloadPath().getAbsolutePath());
+				if(result != Response.CANCEL) {
+					if(result == Response.YES) {
+						FTClient.this.deleteLocalServerFiles();
+					}
+					FTClient.this.resetDownloadPath();
+					Main.saveSettings();
+				}
+			}
+		});
+		mntmResetDownloadDirectory.setText("Reset download directory to default");
+		
 		MenuItem mntmDownloadAllServer = new MenuItem(menu_1, SWT.NONE);
 		mntmDownloadAllServer.addSelectionListener(new SelectionAdapter() {
 			@Override
@@ -836,21 +890,9 @@ public class FTClient {
 		mntmdeleteLocalServer.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
-				Response deleteFiles = new ConfirmDeleteLocalFilesDialog(FTClient.this.shell).open(FTClient.this.downloadPath.getAbsolutePath());
+				Response deleteFiles = new ConfirmDeleteLocalFilesDialog(FTClient.this.shell).open(FTClient.this.getDownloadPathForServerFiles().getAbsolutePath());
 				if(deleteFiles == Response.YES) {
-					for(File file : getDefaultDownloadPath().listFiles()) {
-						if(!FileDeleteStrategy.FORCE.deleteQuietly(file)) {
-							file.deleteOnExit();
-						} else {
-							FTClient.this.numOfFilesDeletedLocally++;
-						}
-					}
-					if(FTClient.this.numOfFilesDeletedLocally > 0) {
-						showPopupMessage("Local file deletion", "Successfully deleted " + FTClient.this.numOfFilesDeletedLocally + " local " + (FTClient.this.numOfFilesDeletedLocally == 1 ? "file" : "folders and files") + " from disk.");
-					} else {
-						showPopupMessage("Local file deletion", "There were no local files found to delete.");
-					}
-					FTClient.this.numOfFilesDeletedLocally = 0;
+					FTClient.this.deleteLocalServerFiles();
 				}
 			}
 		});
@@ -872,6 +914,7 @@ public class FTClient {
 		lblDownloadDestination.setText("Download destination:");
 		
 		this.lblDownloadText = new Label(this.shell, SWT.BORDER);
+		this.lblDownloadText.setToolTipText("The download destination path");
 		this.lblDownloadText.setBounds(131, 10, this.shell.getSize().x - 299, 20);
 		
 		//this.shell.setSize(640, 489);
@@ -936,7 +979,7 @@ public class FTClient {
 				}
 				String fileName = item.getText(0);
 				final String filePath = FTClient.this.currentFTpath + fileName;
-				File folder = FTClient.this.currentFTpath.equals("/") ? FTClient.this.downloadPath : new File(FTClient.this.downloadPath, (FTClient.this.currentFTpath.startsWith("/") ? FTClient.this.currentFTpath.substring(1) : FTClient.this.currentFTpath).replace("/", File.separator));
+				File folder = FTClient.this.currentFTpath.equals("/") ? FTClient.this.getDownloadPathForServerFiles() : new File(FTClient.this.getDownloadPathForServerFiles(), (FTClient.this.currentFTpath.startsWith("/") ? FTClient.this.currentFTpath.substring(1) : FTClient.this.currentFTpath).replace("/", File.separator));
 				if(!folder.exists()) {
 					folder.mkdirs();
 				}
@@ -956,7 +999,7 @@ public class FTClient {
 				TreeItem item = FTClient.this.tree.getSelection()[0];
 				String fileName = item.getText(0);
 				final String filePath = FTClient.this.currentFTpath + fileName;
-				File folder = FTClient.this.currentFTpath.equals("/") ? FTClient.this.downloadPath : new File(FTClient.this.downloadPath, (FTClient.this.currentFTpath.startsWith("/") ? FTClient.this.currentFTpath.substring(1) : FTClient.this.currentFTpath).replace("/", File.separator));
+				File folder = FTClient.this.currentFTpath.equals("/") ? FTClient.this.getDownloadPathForServerFiles() : new File(FTClient.this.getDownloadPathForServerFiles(), (FTClient.this.currentFTpath.startsWith("/") ? FTClient.this.currentFTpath.substring(1) : FTClient.this.currentFTpath).replace("/", File.separator));
 				if(!folder.exists()) {
 					folder.mkdirs();
 				}
@@ -1149,11 +1192,12 @@ public class FTClient {
 		this.currentFTPath.setBounds(100, 36, this.shell.getSize().x - 116, 24);
 		
 		this.btnUpload = new Button(this.shell, SWT.NONE);
+		this.btnUpload.setToolTipText("Choose a file to be uploaded to the server in the current directory.");
 		this.btnUpload.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
 				FileDialog dialog = new FileDialog(FTClient.this.shell);
-				dialog.setFilterPath(FTClient.this.downloadPath.getAbsolutePath());
+				dialog.setFilterPath(FTClient.this.getDownloadPathForServerFiles().getAbsolutePath());
 				String filePath = dialog.open();
 				if(filePath != null) {
 					File check = new File(filePath);
@@ -1228,25 +1272,28 @@ public class FTClient {
 				}
 			}
 		});
-		btnUploadLocallyChanged.setToolTipText("Uploads local files that are found to be newer than their\r\nserver counterparts in the current directory.");
+		btnUploadLocallyChanged.setToolTipText("Uploads local files that are found to be newer than their\r\nserver counterparts in the current directory.\r\nBased on each files' last-modified attribute.");
 		btnUploadLocallyChanged.setBounds(417, 66, 197, 23);
 		btnUploadLocallyChanged.setText("Upload locally changed files");
 		
 		//this.shell.setSize(640, 489);
 		
 		this.btnSetDownloadDirectory = new Button(this.shell, SWT.NONE);
+		this.btnSetDownloadDirectory.setToolTipText("Set the folder where server files are stored locally for editing.\r\nChanging the folder does not delete files from the old folder, so be careful not to create duplicate files/folders, etc.");
 		this.btnSetDownloadDirectory.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
 				DirectoryDialog dialog = new DirectoryDialog(FTClient.this.shell);
 				dialog.setText("Choose a download destination");
 				dialog.setMessage("Choose the folder that files from the server will be downloaded to.");
-				dialog.setFilterPath(FTClient.this.downloadPath.getAbsolutePath());
+				dialog.setFilterPath(FTClient.this.getDownloadPathForServerFiles().getAbsolutePath());
 				String filePath = dialog.open();
 				if(filePath != null) {
 					File check = new File(filePath);
 					if(check.isDirectory()) {
-						FTClient.this.downloadPath = check;
+						Main.lastFTServerDownloadFolder = check;
+						FTClient.this.downloadPath = null;
+						FTClient.this.getDownloadPathForServerFiles();
 					}
 				}
 			}
@@ -1255,13 +1302,14 @@ public class FTClient {
 		this.btnSetDownloadDirectory.setText("Set download directory...");
 		
 		Button btnOpenDownloadFolder = new Button(this.shell, SWT.NONE);
+		btnOpenDownloadFolder.setToolTipText("Open the folder where server files are stored locally for editing.");
 		btnOpenDownloadFolder.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
 				try {
-					Desktop.getDesktop().browse(FTClient.this.downloadPath.toURI());
+					Desktop.getDesktop().browse(FTClient.this.getDownloadPathForServerFiles().toURI());
 				} catch(IOException e1) {
-					Program.launch(FTClient.this.downloadPath.getAbsolutePath());
+					Program.launch(FTClient.this.getDownloadPathForServerFiles().getAbsolutePath());
 				}
 			}
 		});
