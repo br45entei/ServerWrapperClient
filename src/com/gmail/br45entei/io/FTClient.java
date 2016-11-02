@@ -119,6 +119,7 @@ public class FTClient {
 	
 	protected volatile int									numOfFilesDeletedLocally	= 0;
 	
+	public volatile String									ftRootName					= null;
 	public volatile String									currentFTpath				= null;
 	
 	protected final ConcurrentLinkedDeque<File>				filesToUpload				= new ConcurrentLinkedDeque<>();
@@ -442,6 +443,8 @@ public class FTClient {
 					}
 					this.listDirty = true;
 				}
+			} else if(line.startsWith("ROOTNAME: ")) {
+				this.ftRootName = line.substring("ROOTNAME: ".length());
 			} else if(line.startsWith(Main.PROTOCOL)) {
 				continueData = handleProtocolMessage(line) && continueData;
 			}
@@ -507,6 +510,10 @@ public class FTClient {
 			for(Shell shell : this.shell.getShells()) {
 				shell.dispose();
 			}
+			if(this.receivingListDialog != null) {
+				this.receivingListDialog.close();
+				this.receivingListDialog = null;
+			}
 		}
 	}
 	
@@ -529,7 +536,12 @@ public class FTClient {
 	}
 	
 	public final File getDownloadPathForServerFiles() {
-		return new File(this.getDownloadPath(), AddressUtil.getClientAddressNoPort(this.server.getIpAddress()));
+		File parent = new File(this.getDownloadPath(), AddressUtil.getClientAddressNoPort(this.server.getIpAddress()));
+		File folder = new File(parent, this.ftRootName);
+		if(!folder.exists()) {
+			folder.mkdirs();
+		}
+		return folder;
 	}
 	
 	public static final File getDefaultDownloadPath() {
@@ -537,7 +549,7 @@ public class FTClient {
 	}
 	
 	public final void deleteLocalServerFiles() {
-		for(File file : getDownloadPath().listFiles()) {
+		for(File file : getDownloadPathForServerFiles().listFiles()) {
 			System.out.println(" /!\\Deleting file: " + file.getAbsolutePath() + "\r\n/___\\");
 			if(!FileDeleteStrategy.FORCE.deleteQuietly(file)) {
 				file.deleteOnExit();
@@ -581,10 +593,6 @@ public class FTClient {
 				} else {
 					if(response.equals(Main.PROTOCOL + " 43 FILETRANSFER CONNECTION ESTABLISHED")) {
 						Main.addLogFromServer("File transfer connection established!");
-						File downloadPath = this.getDownloadPathForServerFiles();
-						if(!downloadPath.exists()) {
-							downloadPath.mkdirs();
-						}
 						this.serverInputHandler.start();
 						this.serverOutputHandler.start();
 					} else {
@@ -649,6 +657,10 @@ public class FTClient {
 			});
 			closeServer.setDaemon(true);
 			closeServer.start();
+		}
+		if(this.receivingListDialog != null) {
+			this.receivingListDialog.close();
+			this.receivingListDialog = null;
 		}
 		if(!this.shell.isDisposed()) {
 			this.shell.dispose();
