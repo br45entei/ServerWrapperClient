@@ -1,6 +1,3 @@
-/**
- * 
- */
 package com.gmail.br45entei.io;
 
 import com.gmail.br45entei.data.Property;
@@ -57,7 +54,7 @@ public class UploadProgress extends Dialog {
 					Functions.sleep(10);//display.sleep();
 				}
 			}
-			if(this.result != Response.NO_RESPONSE || this.progressBar.getSelection() == 100) {
+			if(this.result != Response.NO_RESPONSE || (this.progressBar.getSelection() == 100 && this.upload)) {
 				break;
 			}
 		}

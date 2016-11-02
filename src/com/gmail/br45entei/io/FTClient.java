@@ -1,8 +1,6 @@
-/**
- * 
- */
 package com.gmail.br45entei.io;
 
+import com.gmail.br45entei.data.DisposableByteArrayInputStream;
 import com.gmail.br45entei.data.Property;
 import com.gmail.br45entei.main.Main;
 import com.gmail.br45entei.main.PopupDialog;
@@ -15,6 +13,7 @@ import com.gmail.br45entei.util.StringUtil;
 
 import java.awt.Desktop;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
@@ -28,13 +27,17 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.Date;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.regex.Pattern;
 
 import org.apache.commons.io.FileDeleteStrategy;
 import org.apache.commons.io.FilenameUtils;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.dnd.DND;
+import org.eclipse.swt.dnd.DropTarget;
+import org.eclipse.swt.dnd.DropTargetAdapter;
+import org.eclipse.swt.dnd.DropTargetEvent;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.events.MenuAdapter;
 import org.eclipse.swt.events.MenuDetectEvent;
 import org.eclipse.swt.events.MenuDetectListener;
@@ -47,6 +50,7 @@ import org.eclipse.swt.events.ShellEvent;
 import org.eclipse.swt.events.TraverseEvent;
 import org.eclipse.swt.events.TraverseListener;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Button;
@@ -63,6 +67,8 @@ import org.eclipse.swt.widgets.TreeColumn;
 import org.eclipse.swt.widgets.TreeItem;
 import org.eclipse.wb.swt.SWTResourceManager;
 
+import sun.awt.shell.ShellFolder;
+
 /** @author Brian_Entei */
 @SuppressWarnings("javadoc")
 public class FTClient {
@@ -72,8 +78,8 @@ public class FTClient {
 	protected final Shell				parent;
 	protected Shell						shell;
 	protected volatile ServerConnection	server;
-	protected final Thread				serverFTHandler;
-	protected final Thread				serverFileUploader;
+	protected final Thread				serverInputHandler;
+	protected final Thread				serverOutputHandler;
 	private Label						lblDownloadText;
 	protected Tree						tree;
 	protected TreeColumn				trclmnName;
@@ -91,37 +97,38 @@ public class FTClient {
 		DATE;
 	}
 	
-	protected volatile TreeSortType						treeSortType				= TreeSortType.DOWNLOAD;
+	protected volatile TreeSortType							treeSortType				= TreeSortType.DOWNLOAD;
 	
 	//======
 	
-	protected volatile boolean							isClosed					= false;
-	protected final ConcurrentLinkedDeque<String>		cmdsToSendToServer			= new ConcurrentLinkedDeque<>();
+	protected volatile boolean								isClosed					= false;
+	protected final ConcurrentLinkedDeque<String>			cmdsToSendToServer			= new ConcurrentLinkedDeque<>();
 	
 	//=======================================================
 	
-	protected volatile File								downloadPath				= null;
-	protected volatile boolean							openDownloadFolder			= false;
-	protected volatile File								lastDownloadedFile			= null;
-	protected volatile boolean							openDownloadedFile			= false;
-	protected volatile boolean							batchDownload				= false;
-	protected final Property<Double>					batchDownloadPercentage		= new Property<>("BatchDownloadPercentComplete");
-	protected final Property<String>					batchDownloadFileName		= new Property<>("BatchDownloadFileName");
-	protected volatile UploadProgress					downloadProgressDialog		= null;
-	protected volatile int								numOfBatchFilesDownloaded	= 0;
-	protected volatile int								numOfBatchFoldersCreated	= 0;
+	protected volatile File									downloadPath				= null;
+	protected volatile boolean								openDownloadFolder			= false;
+	protected volatile File									lastDownloadedFile			= null;
+	protected volatile boolean								openDownloadedFile			= false;
+	protected volatile boolean								batchDownload				= false;
+	protected final Property<Double>						batchDownloadPercentage		= new Property<>("BatchDownloadPercentComplete");
+	protected final Property<String>						batchDownloadFileName		= new Property<>("BatchDownloadFileName");
+	protected volatile UploadProgress						downloadProgressDialog		= null;
+	protected volatile int									numOfBatchFilesDownloaded	= 0;
+	protected volatile int									numOfBatchFoldersCreated	= 0;
 	
-	protected volatile int								numOfFilesDeletedLocally	= 0;
+	protected volatile int									numOfFilesDeletedLocally	= 0;
 	
-	public volatile String								currentFTpath				= null;
+	public volatile String									currentFTpath				= null;
 	
-	protected final ConcurrentLinkedDeque<File>			filesToUpload				= new ConcurrentLinkedDeque<>();
-	protected volatile boolean							batchUpload					= false;
-	protected volatile String							batchUploadDesiredPath		= null;
-	protected final Property<Double>					uploadProgress				= new Property<>("UploadProgress", Double.valueOf(0.0D));
-	protected volatile IOException						uploadError					= null;
+	protected final ConcurrentLinkedDeque<File>				filesToUpload				= new ConcurrentLinkedDeque<>();
+	protected final ConcurrentLinkedDeque<FolderUploadData>	foldersToUpload				= new ConcurrentLinkedDeque<>();
+	protected volatile boolean								batchUpload					= false;
+	protected volatile String								batchUploadDesiredPath		= null;
+	protected final Property<Double>						uploadProgress				= new Property<>("UploadProgress", Double.valueOf(0.0D));
+	protected volatile IOException							uploadError					= null;
 	
-	protected final ConcurrentLinkedDeque<PopupMessage>	popupMessagesToDisplay		= new ConcurrentLinkedDeque<>();
+	protected final ConcurrentLinkedDeque<PopupMessage>		popupMessagesToDisplay		= new ConcurrentLinkedDeque<>();
 	
 	protected static final class PopupMessage {
 		public final String	title;
@@ -134,15 +141,32 @@ public class FTClient {
 		
 	}
 	
-	protected volatile String[]		fileListPaths		= new String[0];
-	protected volatile boolean		listDirty			= false;
-	protected volatile boolean		listTypeDirty		= false;
+	protected volatile String[]					fileListPaths		= new String[0];
+	protected volatile String[]					fileListHashes		= new String[0];
+	protected volatile LoadingDirectoryDialog	receivingListDialog	= null;
+	protected volatile boolean					receivingList		= false;
+	protected volatile boolean					listDirty			= false;
+	protected volatile boolean					listTypeDirty		= false;
 	
-	protected volatile String		selectedFilePath	= null;
+	protected volatile String					selectedFilePath	= null;
+	
+	protected final String getServerHashFromPath(String filePath) {
+		filePath = filePath.startsWith("/") ? filePath : "/" + filePath;
+		//System.out.println("Searching for index of filePath \"" + filePath + "\":");
+		int i = 0;
+		for(String path : this.fileListPaths) {
+			if(filePath.equals(path)) {
+				//System.out.println("fileListPaths[" + i + "]: \"" + path + "\" matched!");
+				return this.fileListHashes[i];
+			}
+			i++;
+		}
+		return "null";
+	}
 	
 	//=======================================================
 	
-	private static final Image[]	icons				= new Image[20];
+	private static final Image[]	icons	= new Image[20];
 	private Button					btnRefresh;
 	private Button					btnNewFolder;
 	private Button					btnSetDownloadDirectory;
@@ -177,14 +201,19 @@ public class FTClient {
 		this.display = Display.getDefault();
 		this.parent = parent;
 		createContents();
-		this.serverFTHandler = new Thread(new Runnable() {//Used for input purposes
+		this.serverInputHandler = new Thread(new Runnable() {//Used for input purposes
 			@Override
 			public final void run() {
 				FTClient.this.server.println("DIR" + (FTClient.this.currentFTpath != null && !FTClient.this.currentFTpath.isEmpty() ? ": " + FTClient.this.currentFTpath : ""));
 				//FTClient.this.server.println("LIST");
+				long loopStart;
 				while(!FTClient.this.isClosed && FTClient.this.server != null && FTClient.this.server.isAlive()) {
+					loopStart = System.currentTimeMillis();
 					if(!FTClient.this.handleServerData()) {
 						break;
+					}
+					if(System.currentTimeMillis() - loopStart < 250L) {
+						Functions.sleep(8L);
 					}
 				}
 				if(FTClient.this.server.isAlive()) {
@@ -192,12 +221,12 @@ public class FTClient {
 				}
 			}
 		});
-		this.serverFTHandler.setDaemon(true);
-		this.serverFileUploader = new Thread(new Runnable() {//Used for output purposes
+		this.serverInputHandler.setDaemon(true);
+		this.serverOutputHandler = new Thread(new Runnable() {//Used for output purposes
 			@Override
 			public final void run() {
+				long loopStart = System.currentTimeMillis();
 				while(!FTClient.this.isClosed && FTClient.this.server != null && FTClient.this.server.isAlive()) {
-					long loopStart = System.currentTimeMillis();
 					if(FTClient.this.uploadError != null) {
 						FTClient.this.filesToUpload.clear();
 						showPopupMessage("Error uploading files", "An error occurred while uploading files:\r\n" + Functions.throwableToStr(FTClient.this.uploadError));
@@ -206,10 +235,13 @@ public class FTClient {
 					if(FTClient.this.cmdsToSendToServer.size() > 0) {
 						String x;
 						while((x = FTClient.this.cmdsToSendToServer.poll()) != null) {
+							if(x.startsWith("DIR: ")) {
+								FTClient.this.receivingList = true;
+							}
 							FTClient.this.server.println(x);
 						}
 					}
-					if(FTClient.this.filesToUpload != null && FTClient.this.filesToUpload.size() > 0) {
+					if(FTClient.this.filesToUpload.size() > 0) {
 						if(FTClient.this.batchUpload) {
 							FTClient.this.server.println("NOPOPUPDIALOGS: true");
 						}
@@ -225,11 +257,11 @@ public class FTClient {
 										FTClient.this.server.println("MKDIRGODIR: " + FTClient.this.batchUploadDesiredPath);//currentFTpath);
 									}
 									FTClient.this.server.println("FILE");
+									FTClient.this.batchDownloadFileName.setValue(FTClient.this.currentFTpath + (FTClient.this.batchUploadDesiredPath != null ? FTClient.this.batchUploadDesiredPath : "") + fileToUpload.getName());
 									FileTransfer.sendFile(fileToUpload, FTClient.this.server.outStream, FTClient.this.uploadProgress);
 								} else {
 									FTClient.this.showPopupMessage("Failed to upload file - File size too large", "Due to the limitations of a Java Integer,\r\nfile sizes larger than " + Functions.humanReadableByteCount(Integer.MAX_VALUE, false, 2) + " cannot be uploaded using this software.\r\nSorry!");
 								}
-								FTClient.this.filesToUpload.remove(fileToUpload);
 								try {
 									url.getInputStream().close();
 									url.getOutputStream().close();
@@ -238,22 +270,62 @@ public class FTClient {
 							} catch(IOException e) {
 								FTClient.this.uploadError = e;
 							}
+							FTClient.this.filesToUpload.remove(fileToUpload);
 							FTClient.this.server.println("LIST");
 						}
+					}
+					if(FTClient.this.foldersToUpload.size() > 0) {
 						if(FTClient.this.batchUpload) {
-							FTClient.this.server.println("NOPOPUPDIALOGS: false");
-							FTClient.this.batchUpload = false;
-							FTClient.this.batchUploadDesiredPath = null;
+							FTClient.this.server.println("NOPOPUPDIALOGS: true");
 						}
+						while(FTClient.this.foldersToUpload.peek() != null) {
+							FolderUploadData folder = FTClient.this.foldersToUpload.poll();
+							FTClient.this.server.println("MKDIRGODIRFULL: " + folder.serverPath);
+							for(File fileToUpload : folder.folder.listFiles()) {
+								if(fileToUpload == null) {
+									continue;
+								}
+								if(fileToUpload.isDirectory()) {
+									FTClient.this.foldersToUpload.add(new FolderUploadData(fileToUpload, folder.serverPath));
+									continue;
+								}
+								try {
+									URLConnection url = fileToUpload.toURI().toURL().openConnection();
+									long size = url.getContentLengthLong();
+									if(size < Integer.MAX_VALUE) {
+										FTClient.this.server.println("FILE");
+										FTClient.this.batchDownloadFileName.setValue(folder.serverPath + fileToUpload.getName());
+										FileTransfer.sendFile(fileToUpload, FTClient.this.server.outStream, FTClient.this.uploadProgress);
+									} else {
+										FTClient.this.showPopupMessage("Failed to upload file - File size too large", "Due to the limitations of a Java Integer,\r\nfile sizes larger than " + Functions.humanReadableByteCount(Integer.MAX_VALUE, false, 2) + " cannot be uploaded using this software.\r\nSorry!");
+									}
+									try {
+										url.getInputStream().close();
+										url.getOutputStream().close();
+									} catch(IOException ignored) {
+									}
+								} catch(IOException e) {
+									FTClient.this.uploadError = e;
+								}
+								FTClient.this.filesToUpload.remove(fileToUpload);
+								FTClient.this.server.println("LIST");
+							}
+						}
+					}
+					if(FTClient.this.batchUpload) {
+						FTClient.this.server.println("NOPOPUPDIALOGS: false");
+						FTClient.this.batchUpload = false;
+						FTClient.this.batchUploadDesiredPath = null;
 					}
 					if(System.currentTimeMillis() - loopStart > 10L) {
 						Functions.sleep(10L);
+						loopStart = System.currentTimeMillis();
 					}
 				}
 				FTClient.this.result = FTClient.this.result != Response.CLOSE ? Response.DISCONNECT : FTClient.this.result;
 			}
 		});
-		this.serverFileUploader.setDaemon(true);
+		this.serverOutputHandler.setDaemon(true);
 		this.batchDownloadPercentage.setValue(Double.valueOf(0.0D));
 		this.batchDownloadFileName.setValue("");
 	}
@@ -269,7 +341,8 @@ public class FTClient {
 			if(line == null) {
 				return false;
 			}
-			if(line.isEmpty()) {//probably a ping check
+			System.out.println("serverData: " + line);
+			if(line.isEmpty()) {//probably a ping check, should be happening every half second
 				return true;
 			}
 			if(line.equals("GETALLFILES: END")) {
@@ -292,21 +365,43 @@ public class FTClient {
 				File folder = path.equals("/") ? this.getDownloadPathForServerFiles() : new File(this.getDownloadPathForServerFiles(), (path.startsWith("/") ? path.substring(1) : path).replace("/", File.separator));
 				if(!folder.exists()) {
 					folder.mkdirs();
-					if(this.batchDownload) {
-						this.numOfBatchFoldersCreated++;
-					}
+				}
+				if(this.batchDownload) {
+					this.numOfBatchFoldersCreated++;
 				}
 			} else if(line.equals("FILE")) {
-				FileData data = FileTransfer.readFile(this.server.in);
+				FileData data = this.batchDownload ? FileTransfer.readFile(this.server.in, this.batchDownloadPercentage) : FileTransfer.readFile(this.server.in);
 				File folder = this.currentFTpath.equals("/") ? this.getDownloadPathForServerFiles() : new File(this.getDownloadPathForServerFiles(), (this.currentFTpath.startsWith("/") ? this.currentFTpath.substring(1) : this.currentFTpath).replace("/", File.separator));
 				if(!folder.exists()) {
 					folder.mkdirs();
 				}
 				File file = new File(folder, data.name);
+				DisposableByteArrayInputStream in = new DisposableByteArrayInputStream(data.data);
 				try(FileOutputStream out = new FileOutputStream(file)) {
-					out.write(data.data, 0, data.getSize());
+					//out.write(data.data, 0, data.getSize());
+					int count = 0;
+					byte[] buf = new byte[4096];
+					int remaining = data.data.length - count;
+					int read = in.read(buf, 0, Math.min(buf.length, remaining));
+					count += read;
+					out.write(buf, 0, read);
+					remaining = data.data.length - count;
+					this.batchDownloadPercentage.setValue(Double.valueOf(((count + 0.00D) / (data.data.length + 0.00D) * 100.0D)));
+					while(remaining > 0) {
+						remaining = data.data.length - count;
+						read = in.read(buf, 0, Math.min(buf.length, remaining));
+						if(read == -1) {
+							break;
+						}
+						count += read;
+						out.write(buf, 0, read);
+						remaining = data.data.length - count;
+						this.batchDownloadPercentage.setValue(Double.valueOf(((count + 0.00D) / (data.data.length + 0.00D) * 100.0D)));
+					}
 					out.flush();
+					in.close();
 				} catch(IOException e) {
+					in.close();
 					this.showPopupMessage("Failed to download file", "The file \"" + data + "\" failed to save to disk!\r\nPlease try again.\r\n\r\nError details: " + e.getMessage());
 				}
 				Files.setLastModifiedTime(Paths.get(file.toURI()), FileTime.fromMillis(data.lastModified));//BasicFileAttributes attributes = Files.readAttributes(Paths.get(file.toURI()), BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
@@ -339,8 +434,11 @@ public class FTClient {
 				if(StringUtil.isStrInt(numOfListStr)) {
 					int numOfList = Integer.valueOf(numOfListStr).intValue();
 					this.fileListPaths = new String[numOfList];
+					this.fileListHashes = new String[numOfList];
+					this.receivingList = true;
 					for(int i = 0; i < numOfList; i++) {
 						this.fileListPaths[i] = StringUtil.readLine(this.server.in);
+						this.fileListHashes[i] = StringUtil.readLine(this.server.in);
 					}
 					this.listDirty = true;
 				}
@@ -439,7 +537,8 @@ public class FTClient {
 	}
 	
 	public final void deleteLocalServerFiles() {
-		for(File file : getDefaultDownloadPath().listFiles()) {
+		for(File file : getDownloadPath().listFiles()) {
+			System.out.println(" /!\\Deleting file: " + file.getAbsolutePath() + "\r\n/___\\");
 			if(!FileDeleteStrategy.FORCE.deleteQuietly(file)) {
 				file.deleteOnExit();
 			} else {
@@ -486,8 +585,8 @@ public class FTClient {
 						if(!downloadPath.exists()) {
 							downloadPath.mkdirs();
 						}
-						this.serverFTHandler.start();
-						this.serverFileUploader.start();
+						this.serverInputHandler.start();
+						this.serverOutputHandler.start();
 					} else {
 						String instaClose = Main.PROTOCOL + " -1 CLOSE";
 						String notConnected = Main.PROTOCOL + " 27 USER NOT CONNECTED: ";
@@ -524,14 +623,15 @@ public class FTClient {
 			if("NO_PERMS".equals(errorStr)) {
 				return Response.NO_PERMS;
 			}
-			new PopupDialog(this.shell, "Error opening file transfer connection", errorStr != null ? errorStr : "An unknown error occurred when attempting to open a secondary connection to the server wrapper.\r\nPlease try again.").open();
+			if(!this.shell.isDisposed()) {
+				new PopupDialog(this.shell, "Error opening file transfer connection", errorStr != null ? errorStr : "An unknown error occurred when attempting to open a secondary connection to the server wrapper.\r\nPlease try again.").open();
+			}
 			return Response.DISCONNECT;
 		}
 		this.shell.open();
 		this.shell.layout();
 		while(!this.shell.isDisposed()) {
-			Main.mainLoop();
-			this.updateUI();
+			this.mainLoop();
 			if(!this.server.isAlive()) {
 				break;
 			}
@@ -541,12 +641,14 @@ public class FTClient {
 		}
 		this.isClosed = true;
 		if(this.server.isAlive()) {
-			new Thread(new Runnable() {
+			Thread closeServer = new Thread(new Runnable() {
 				@Override
 				public final void run() {
 					FTClient.this.server.closeNicely();
 				}
-			}).start();
+			});
+			closeServer.setDaemon(true);
+			closeServer.start();
 		}
 		if(!this.shell.isDisposed()) {
 			this.shell.dispose();
@@ -555,6 +657,11 @@ public class FTClient {
 			new PopupDialog(this.parent, "Connection Error", "The file transfer connection was interrupted unexpectedly.\r\nPlease try connecting again.").open();
 		}
 		return this.result;
+	}
+	
+	protected final void mainLoop() {
+		Main.mainLoop();
+		this.updateUI();
 	}
 	
 	private final TreeItem setItemInTree(String path) {
@@ -595,7 +702,21 @@ public class FTClient {
 			} else if(ext.equalsIgnoreCase("old")) {
 				item.setImage(icons[19]);
 			} else {
-				item.setImage(icons[1]);
+				File local = new File(this.getDownloadPathForServerFiles().getAbsolutePath() + this.currentFTpath + File.separator + filePath);
+				Image image = null;
+				if(ext.equalsIgnoreCase("exe") && local.isFile()) {
+					try {
+						ImageData data = ImageUtil.convertAWTImageToSWT(ShellFolder.getShellFolder(local).getIcon(true));
+						image = (data != null ? (data.transparentPixel > 0 ? new Image(this.display, data, data.getTransparencyMask()) : new Image(this.display, data)) : null);
+					} catch(FileNotFoundException ignored) {
+					}
+				}
+				if(image == null) {
+					Program prog = Program.findProgram(ext);
+					ImageData data = prog == null ? null : prog.getImageData();
+					image = (data != null ? (data.transparentPixel > 0 ? new Image(this.display, data, data.getTransparencyMask()) : new Image(this.display, data)) : icons[1]);
+				}
+				item.setImage(image);
 			}
 		}
 		item.setText(0, filePath.length() <= this.currentFTpath.length() ? filePath : filePath.substring(this.currentFTpath.length()));
@@ -715,6 +836,15 @@ public class FTClient {
 	}
 	
 	private final void updateUI() {
+		if(this.receivingList && this.receivingListDialog == null) {
+			this.receivingListDialog = new LoadingDirectoryDialog(this);
+			this.tree.setEnabled(false);
+			this.receivingListDialog.open();
+		} else if(!this.receivingList) {
+			if(!this.tree.getEnabled()) {
+				this.tree.setEnabled(true);
+			}
+		}
 		Functions.setTextFor(this.lblDownloadText, this.getDownloadPathForServerFiles().getAbsolutePath());
 		Functions.setTextFor(this.currentFTPath, this.batchDownload ? "[Downloading from: " + this.currentFTpath + " ...]" : this.currentFTpath);
 		if(!this.popupMessagesToDisplay.isEmpty()) {
@@ -738,8 +868,13 @@ public class FTClient {
 		if(this.listDirty) {
 			this.updateTree();
 			this.listDirty = false;
+			this.receivingList = false;
 			this.updateTreeOrder();
 			this.listTypeDirty = false;
+			if(this.receivingListDialog != null) {
+				this.receivingListDialog.close();
+				this.receivingListDialog = null;
+			}
 		}
 		if(this.listTypeDirty) {
 			this.updateTreeOrder();
@@ -860,6 +995,10 @@ public class FTClient {
 		mntmResetDownloadDirectory.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {
+				if(getDownloadPath().getAbsolutePath().equals(getDefaultDownloadPath().getAbsolutePath())) {
+					new PopupDialog(FTClient.this.shell, "Error resetting downloads folder", "The current download directory is already the default directory.").open();
+					return;
+				}
 				Response result = new PromptDeleteLocalFilesDialog(FTClient.this.shell).open(FTClient.this.getDownloadPath().getAbsolutePath());
 				if(result != Response.CANCEL) {
 					if(result == Response.YES) {
@@ -938,6 +1077,10 @@ public class FTClient {
 			
 			@Override
 			public void widgetDefaultSelected(SelectionEvent event) {
+				if(FTClient.this.receivingList) {
+					event.doit = false;
+					return;
+				}
 				final TreeItem[] selection = FTClient.this.tree.getSelection();
 				if(selection != null && selection.length != 0) {
 					TreeItem item = selection[0];
@@ -954,6 +1097,66 @@ public class FTClient {
 				}
 			}
 		});
+		DropTarget dt = new DropTarget(this.tree, DND.DROP_DEFAULT | DND.DROP_MOVE | DND.DROP_COPY);
+		dt.setTransfer(new Transfer[] {org.eclipse.swt.dnd.FileTransfer.getInstance()});
+		dt.addDropListener(new DropTargetAdapter() {
+			protected volatile String folderPath;
+			
+			@Override
+			public void dropAccept(DropTargetEvent event) {
+				if(FTClient.this.receivingList) {
+					this.folderPath = null;
+					return;
+				}
+				if(event.item instanceof TreeItem) {
+					TreeItem item = (TreeItem) event.item;
+					if(item.getText(0).endsWith("/")) {
+						this.folderPath = FTClient.this.currentFTpath + item.getText(0);
+					} else {
+						this.folderPath = null;
+					}
+				}
+			}
+			
+			@Override
+			public void drop(DropTargetEvent event) {
+				if(FTClient.this.receivingList) {
+					this.folderPath = null;
+					return;
+				}
+				String fileList[] = null;
+				org.eclipse.swt.dnd.FileTransfer ft = org.eclipse.swt.dnd.FileTransfer.getInstance();
+				if(ft.isSupportedType(event.currentDataType)) {
+					this.folderPath = this.folderPath == null ? FTClient.this.currentFTpath : this.folderPath;
+					fileList = (String[]) event.data;
+					System.out.println("Drop target path: " + this.folderPath);
+					ArrayList<File> filesToUpload = new ArrayList<>();
+					ArrayList<FolderUploadData> foldersToUpload = new ArrayList<>();
+					System.out.println("Files/folders dragged:");
+					for(String filePath : fileList) {
+						File file = new File(filePath);
+						if(!file.exists()) {
+							continue;
+						}
+						if(file.isFile()) {
+							filesToUpload.add(file);
+							System.out.println(file.getAbsolutePath());
+						} else {
+							FolderUploadData folder = new FolderUploadData(file, this.folderPath);
+							foldersToUpload.add(folder);
+							System.out.println("Folder to upload: " + folder.serverPath);
+						}
+					}
+					FTClient.this.batchUpload = true;
+					FTClient.this.downloadProgressDialog = new UploadProgress(FTClient.this.shell, true, FTClient.this.uploadProgress, FTClient.this.batchDownloadFileName);
+					FTClient.this.batchUploadDesiredPath = this.folderPath;
+					FTClient.this.filesToUpload.addAll(filesToUpload);
+					FTClient.this.foldersToUpload.addAll(foldersToUpload);
+					FTClient.this.downloadProgressDialog.open();
+				}
+				this.folderPath = null;
+			}
+		});
 		Menu menu1 = new Menu(this.tree);
 		this.tree.setMenu(menu1);
 		this.tree.addMenuDetectListener(new MenuDetectListener() {
@@ -961,7 +1164,7 @@ public class FTClient {
 			public void menuDetected(MenuDetectEvent e) {
 				//System.out.println(e.getSource().getClass().getSimpleName());
 				TreeItem[] items = FTClient.this.tree.getSelection();
-				if(items == null || items.length == 0 || items[0] == null) {
+				if(FTClient.this.receivingList || items == null || items.length == 0 || items[0] == null) {
 					e.doit = false;
 				}
 			}
@@ -980,13 +1183,16 @@ public class FTClient {
 				String fileName = item.getText(0);
 				final String filePath = FTClient.this.currentFTpath + fileName;
 				File folder = FTClient.this.currentFTpath.equals("/") ? FTClient.this.getDownloadPathForServerFiles() : new File(FTClient.this.getDownloadPathForServerFiles(), (FTClient.this.currentFTpath.startsWith("/") ? FTClient.this.currentFTpath.substring(1) : FTClient.this.currentFTpath).replace("/", File.separator));
-				if(!folder.exists()) {
-					folder.mkdirs();
+				if(fileName.endsWith("/")) {
+					if(!folder.exists()) {
+						folder.mkdirs();
+					}
+				} else {
+					final File local = new File(folder, fileName);
+					final String ext = FilenameUtils.getExtension(fileName);
+					final boolean viewable = isFileViewable(ext);
+					//TODO
 				}
-				final File local = new File(folder, fileName);
-				final String ext = FilenameUtils.getExtension(fileName);
-				final boolean viewable = isFileViewable(ext);
-				
 			}
 		});
 		menu1.addMenuListener(new MenuAdapter() {
@@ -995,6 +1201,9 @@ public class FTClient {
 				MenuItem[] items = menu1.getItems();
 				for(int i = 0; i < items.length; i++) {
 					items[i].dispose();
+				}
+				if(FTClient.this.receivingList) {
+					return;
 				}
 				TreeItem item = FTClient.this.tree.getSelection()[0];
 				String fileName = item.getText(0);
@@ -1075,28 +1284,30 @@ public class FTClient {
 					});
 				}
 				
-				new MenuItem(menu1, SWT.SEPARATOR);
-				
-				MenuItem newItem2 = new MenuItem(menu1, SWT.NONE);
-				newItem2.setText("Rename " + (fileName.endsWith("/") ? "folder" : "file") + "...");
-				newItem2.addSelectionListener(new SelectionAdapter() {
+				if(!fileName.equals("../")) {
+					new MenuItem(menu1, SWT.SEPARATOR);
 					
-					@Override
-					public final void widgetSelected(SelectionEvent event) {
-						FTClient.this.cmdsToSendToServer.add("RENAME: " + filePath + "\r\n" + new RenameFileDialog(FTClient.this.shell).open(fileName.replace("/", "")));
-					}
-				});
-				MenuItem newItem3 = new MenuItem(menu1, SWT.NONE);
-				newItem3.setText("Delete " + (fileName.endsWith("/") ? "folder" : "file"));
-				newItem3.addSelectionListener(new SelectionAdapter() {
-					@Override
-					public final void widgetSelected(SelectionEvent event) {
-						Response delete = new ConfirmDeleteServerFileDialog(FTClient.this.shell).open(fileName);
-						if(delete == Response.YES) {
-							FTClient.this.cmdsToSendToServer.add("DELETE: " + filePath);
+					MenuItem newItem2 = new MenuItem(menu1, SWT.NONE);
+					newItem2.setText("Rename " + (fileName.endsWith("/") ? "folder" : "file") + "...");
+					newItem2.addSelectionListener(new SelectionAdapter() {
+						
+						@Override
+						public final void widgetSelected(SelectionEvent event) {
+							FTClient.this.cmdsToSendToServer.add("RENAME: " + filePath + "\r\n" + new RenameFileDialog(FTClient.this.shell).open(fileName.replace("/", "")));
 						}
-					}
-				});
+					});
+					MenuItem newItem3 = new MenuItem(menu1, SWT.NONE);
+					newItem3.setText("Delete " + (fileName.endsWith("/") ? "folder" : "file"));
+					newItem3.addSelectionListener(new SelectionAdapter() {
+						@Override
+						public final void widgetSelected(SelectionEvent event) {
+							Response delete = new ConfirmDeleteServerFileDialog(FTClient.this.shell).open(fileName);
+							if(delete == Response.YES) {
+								FTClient.this.cmdsToSendToServer.add("DELETE: " + filePath);
+							}
+						}
+					});
+				}
 			}
 		});
 		
@@ -1240,39 +1451,26 @@ public class FTClient {
 				int numOfFilesUploaded = 0;
 				for(TreeItem item : FTClient.this.tree.getItems()) {
 					String fileName = item.getText(0);
-					File local = new File(getDefaultDownloadPath(), fileName);
+					File local = new File(FTClient.this.getDownloadPathForServerFiles().getAbsolutePath() + FTClient.this.currentFTpath + File.separator + fileName);//File local = new File(getDownloadPathForServerFiles(), fileName);
 					if(!local.isFile()) {
 						continue;
 					}
-					Date date;
-					try {
-						date = StringUtil.getCacheValidatorTimeFormat().parse(item.getText(2));
-					} catch(ParseException ignored) {
-						date = null;//this should never happen
-					}
-					if(date == null) {
-						continue;
-					}
-					long serverTime = date.getTime();
-					long localTime = -1L;
-					try {
-						URLConnection url = local.toURI().toURL().openConnection();
-						localTime = url.getLastModified() - 3000L;
-						url.getInputStream().close();
-						url.getOutputStream().close();
-					} catch(Throwable ignored) {
-						if(localTime == -1L) {
-							localTime = local.lastModified();
-						}
-					}
-					if(localTime > serverTime) {
+					System.out.println("Found file \"" + local.getAbsolutePath() + "\"; checking hash...");
+					String localHash = FileTransfer.hashFile(local);
+					String filePath = item.getText(0) + "?" + item.getText(1) + "?" + item.getText(2);
+					String serverHash = getServerHashFromPath(filePath);
+					if(serverHash != null && !localHash.equals(serverHash)) {
+						System.out.println("client hash: " + localHash + "\r\nserver hash: " + serverHash);
 						FTClient.this.filesToUpload.add(local);
 						numOfFilesUploaded++;
 					}
 				}
+				if(numOfFilesUploaded == 0) {
+					new PopupDialog(FTClient.this.shell, "Upload changed files", "There were no locally changed files found to upload.").open();
+				}
 			}
 		});
-		btnUploadLocallyChanged.setToolTipText("Uploads local files that are found to be newer than their\r\nserver counterparts in the current directory.\r\nBased on each files' last-modified attribute.");
+		btnUploadLocallyChanged.setToolTipText("Uploads local files that are found to be different than their\r\nserver counterparts in the current directory.\r\nBased on comparing the hashes of each file.");
 		btnUploadLocallyChanged.setBounds(417, 66, 197, 23);
 		btnUploadLocallyChanged.setText("Upload locally changed files");
 		

@@ -1,6 +1,3 @@
-/**
- * 
- */
 package com.gmail.br45entei.io;
 
 import com.gmail.br45entei.main.Main;

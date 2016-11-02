@@ -75,7 +75,7 @@ public final class Main {
 	
 	public static final String								PROTOCOL_NAME			= "RemAdmin";
 	public static final String								PROTOCOL_DELIMITER		= "/";
-	public static final String								PROTOCOL_VERSION		= "1.02";
+	public static final String								PROTOCOL_VERSION		= "1.02.1";
 	
 	/** This application's networking protocol */
 	public static final String								PROTOCOL				= PROTOCOL_NAME + PROTOCOL_DELIMITER + PROTOCOL_VERSION;
@@ -978,11 +978,12 @@ public final class Main {
 				if(ftClient != null) {
 					ftClient.setFocus();
 				} else {
-					final FTClient client = ftClient = new FTClient(shell).setDownloadPath(lastFTServerDownloadFolder);
-					ftClient.currentFTpath = (lastFTServerPath == null || lastFTServerPath.isEmpty()) ? ftClient.currentFTpath : lastFTServerPath;
-					Response result = ftClient.open(server.ip, server.port, clientUsername.getText(), clientPassword.getText());
+					final FTClient client = new FTClient(shell).setDownloadPath(lastFTServerDownloadFolder);
+					ftClient = client;
+					client.currentFTpath = (lastFTServerPath == null || lastFTServerPath.isEmpty()) ? client.currentFTpath : lastFTServerPath;
+					Response result = client.open(server.ip, server.port, clientUsername.getText(), clientPassword.getText());
 					lastFTServerPath = client.currentFTpath;
-					lastFTServerDownloadFolder = ftClient.getDownloadPath();
+					lastFTServerDownloadFolder = client.getDownloadPath();
 					ftClient = null;
 					saveSettings();
 				}
