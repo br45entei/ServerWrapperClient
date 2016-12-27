@@ -259,6 +259,9 @@ public class FTClient {
 									}
 									FTClient.this.server.println("FILE");
 									FTClient.this.batchDownloadFileName.setValue(FTClient.this.currentFTpath + (FTClient.this.batchUploadDesiredPath != null ? FTClient.this.batchUploadDesiredPath : "") + fileToUpload.getName());
+									if(FTClient.this.batchDownloadFileName.getValue().startsWith("//")) {
+										FTClient.this.batchDownloadFileName.setValue(FTClient.this.batchDownloadFileName.getValue().substring(1));
+									}
 									FileTransfer.sendFile(fileToUpload, FTClient.this.server.outStream, FTClient.this.uploadProgress);
 								} else {
 									FTClient.this.showPopupMessage("Failed to upload file - File size too large", "Due to the limitations of a Java Integer,\r\nfile sizes larger than " + Functions.humanReadableByteCount(Integer.MAX_VALUE, false, 2) + " cannot be uploaded using this software.\r\nSorry!");
@@ -296,6 +299,9 @@ public class FTClient {
 									if(size < Integer.MAX_VALUE) {
 										FTClient.this.server.println("FILE");
 										FTClient.this.batchDownloadFileName.setValue(folder.serverPath + fileToUpload.getName());
+										if(FTClient.this.batchDownloadFileName.getValue().startsWith("//")) {
+											FTClient.this.batchDownloadFileName.setValue(FTClient.this.batchDownloadFileName.getValue().substring(1));
+										}
 										FileTransfer.sendFile(fileToUpload, FTClient.this.server.outStream, FTClient.this.uploadProgress);
 									} else {
 										FTClient.this.showPopupMessage("Failed to upload file - File size too large", "Due to the limitations of a Java Integer,\r\nfile sizes larger than " + Functions.humanReadableByteCount(Integer.MAX_VALUE, false, 2) + " cannot be uploaded using this software.\r\nSorry!");
@@ -537,7 +543,11 @@ public class FTClient {
 	
 	public final File getDownloadPathForServerFiles() {
 		File parent = new File(this.getDownloadPath(), AddressUtil.getClientAddressNoPort(this.server.getIpAddress()));
-		File folder = new File(parent, this.ftRootName);
+		String ftRootName = this.ftRootName;
+		if(ftRootName == null) {
+			ftRootName = "";//Fix potential NPE that still seems to happen sometimes...
+		}
+		File folder = new File(parent, ftRootName);
 		if(!folder.exists()) {
 			folder.mkdirs();
 		}
@@ -550,7 +560,7 @@ public class FTClient {
 	
 	public final void deleteLocalServerFiles() {
 		for(File file : getDownloadPathForServerFiles().listFiles()) {
-			System.out.println(" /!\\Deleting file: " + file.getAbsolutePath() + "\r\n/___\\");
+			System.out.println(" /!\\ Deleting file: " + file.getAbsolutePath() + "\r\n/___\\");
 			if(!FileDeleteStrategy.FORCE.deleteQuietly(file)) {
 				file.deleteOnExit();
 			} else {
@@ -1570,4 +1580,5 @@ public class FTClient {
 		}
 		
 	}
+	
 }
